@@ -1,0 +1,42 @@
+# ─── OS & editors ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+*.sublime-*
+
+# ─── Secrets, credentials & local env (never push these) ─────
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env*.example
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.key
+*_rsa
+*_ed25519
+*.secret
+secrets/
+credentials.json
+*-credentials.json
+service-account*.json
+
+# ─── Logs & dumps (may contain tokens in errors) ─────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dump.rdb
+
+# ─── Local tooling / caches at repo root ─────────────────────
+.turbo
+.cache

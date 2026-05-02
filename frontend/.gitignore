@@ -1,0 +1,45 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ─── Dependencies ─────────────────────────────────────────────
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ─── Next.js ──────────────────────────────────────────────────
+/.next/
+/out/
+
+# ─── Production build ─────────────────────────────────────────
+/build
+
+# ─── Testing ──────────────────────────────────────────────────
+/coverage
+
+# ─── Environment & secrets (never commit real values) ─────────
+# Allow committing templates only:
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env*.example
+*.pem
+*.p12
+*.pfx
+.vercel
+
+# ─── Debug logs ───────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─── TypeScript / Next generated (safe to commit next-env.d.ts) ─
+*.tsbuildinfo
+
+# ─── Misc ─────────────────────────────────────────────────────
+.DS_Store

@@ -1,0 +1,21 @@
+create table if not exists public.attachments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  conversation_id uuid references public.conversations(id) on delete cascade,
+  message_id uuid references public.messages(id) on delete set null,
+  type public.attachment_type not null,
+  bucket text not null,
+  object_path text not null,
+  file_name text,
+  mime_type text,
+  file_size_bytes bigint check (file_size_bytes >= 0),
+  sha256 text,
+  ingestion_status public.ingestion_status not null default 'pending',
+  extracted_text text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz,
+  deleted_by uuid references auth.users(id),
+  unique (bucket, object_path)
+);
