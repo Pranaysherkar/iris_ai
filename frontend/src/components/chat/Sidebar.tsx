@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { irisLogoSrc, useUiTheme } from "@/lib/use-ui-theme";
 import type { Chat } from "./ChatLayout";
 
 type Props = {
@@ -47,6 +48,8 @@ export default function Sidebar({
   const [hoveredChat, setHoveredChat] = useState<string | null>(null);
 
   const { today, yesterday, older } = groupChatsByDate(chats);
+  const uiTheme = useUiTheme();
+  const logoSrc = irisLogoSrc(uiTheme);
 
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -90,7 +93,7 @@ export default function Sidebar({
           <div className="sidebar-brand">
             <div className="sidebar-logo-ring">
               <div className="sidebar-logo-inner">
-                <Image src="/iris.gif" alt="Iris" width={32} height={32} unoptimized priority className="sidebar-logo-gif" />
+                <Image src={logoSrc} alt="Iris" width={28} height={28} unoptimized priority className="sidebar-logo-gif" />
               </div>
             </div>
             <span className="sidebar-brand-name">Iris AI</span>
@@ -222,7 +225,7 @@ const sidebarStyles = `
     white-space: nowrap;
   }
   .sidebar-logo-ring {
-    width: 44px; height: 26px;
+    width: 40px; height: 24px;
     border-radius: 100px;
     background: linear-gradient(135deg, #7c6aff, #c084fc, #38bdf8);
     padding: 1.5px;
@@ -416,6 +419,22 @@ const sidebarStyles = `
   }
   [data-theme="light"] .sidebar-brand-name {
     color: #111118;
+  }
+  /* Logo capsule: one clear surface + subtle edge (avoid muddy blend with white bg) */
+  [data-theme="light"] .sidebar-logo-ring {
+    padding: 1.5px;
+    box-shadow: 0 1px 5px rgba(124, 106, 255, 0.22);
+    background: linear-gradient(
+      135deg,
+      rgba(124, 106, 255, 0.88),
+      rgba(192, 132, 252, 0.85),
+      rgba(56, 189, 248, 0.85)
+    );
+  }
+  [data-theme="light"] .sidebar-logo-inner {
+    background: #f2f0ff;
+    border: 1px solid rgba(124, 106, 255, 0.35);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 1px 3px rgba(0, 0, 0, 0.06);
   }
   [data-theme="light"] .new-chat-btn {
     background: #ffffff;

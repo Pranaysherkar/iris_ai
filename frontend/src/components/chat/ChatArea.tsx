@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import { irisLogoSrc, useUiTheme } from "@/lib/use-ui-theme";
 import type { Chat } from "./ChatLayout";
 import MessageBubble from "./MessageBubble";
 import ChatInput from "./ChatInput";
@@ -35,6 +36,8 @@ export default function ChatArea({
   historyError = null,
   onRetryHistory,
 }: Props) {
+  const uiTheme = useUiTheme();
+  const logoSrc = irisLogoSrc(uiTheme);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasUserMessages = chat.messages.some((m) => m.role === "user");
 
@@ -61,7 +64,7 @@ export default function ChatArea({
             <div className="chat-header-brand">
               <div className="chat-header-logo-ring">
                 <div className="chat-header-logo-inner">
-                  <Image src="/iris.gif" alt="Iris" width={22} height={22} unoptimized priority className="chat-header-logo" />
+                  <Image src={logoSrc} alt="Iris" width={22} height={22} unoptimized priority className="chat-header-logo" />
                 </div>
               </div>
               <span className="chat-header-brand-name">Iris AI</span>
@@ -99,7 +102,7 @@ export default function ChatArea({
           <div className="empty-state">
             <div className="empty-logo-ring">
               <div className="empty-logo-inner">
-                <Image src="/iris.gif" alt="Iris" width={64} height={64} unoptimized priority className="empty-logo" />
+                <Image src={logoSrc} alt="Iris" width={64} height={64} unoptimized priority className="empty-logo" />
               </div>
             </div>
             <h1 className="empty-title">
@@ -480,6 +483,32 @@ const chatAreaStyles = `
   }
   [data-theme="light"] .chat-header-brand-name {
     color: #111118;
+  }
+  [data-theme="light"] .chat-header-logo-inner {
+    background: #f2f0ff;
+    border: 1px solid rgba(124, 106, 255, 0.35);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 1px 4px rgba(0, 0, 0, 0.07);
+  }
+  /* Hero empty state: slightly richer depth than sidebar / header chip */
+  [data-theme="light"] .empty-logo-ring {
+    padding: 2px;
+    box-shadow:
+      0 10px 40px rgba(124, 106, 255, 0.18),
+      0 2px 12px rgba(0, 0, 0, 0.05);
+    background: linear-gradient(
+      135deg,
+      rgba(124, 106, 255, 0.9),
+      rgba(192, 132, 252, 0.88),
+      rgba(56, 189, 248, 0.88)
+    );
+  }
+  [data-theme="light"] .empty-logo-inner {
+    background: #f2f0ff;
+    border: 1px solid rgba(124, 106, 255, 0.38);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.4),
+      0 6px 20px rgba(124, 106, 255, 0.2),
+      0 2px 6px rgba(0, 0, 0, 0.06);
   }
   [data-theme="light"] .chat-model-badge {
     background: rgba(124,106,255,0.1);

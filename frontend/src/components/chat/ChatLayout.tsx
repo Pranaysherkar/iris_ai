@@ -14,6 +14,22 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 import Sidebar from "./Sidebar";
 import ChatArea from "./ChatArea";
 
+/** User-facing copy for API/network/backend failures — raw errors are never shown. */
+const CHAT_GENERIC_USER_ERROR =
+  "We're having trouble processing your request right now. Please try again in a moment.";
+
+function displayChatFailureMessage(raw: string): string {
+  const t = raw.trim().toLowerCase();
+  if (
+    t.includes("not signed in") ||
+    t.includes("sign in again") ||
+    t.includes("please sign in")
+  ) {
+    return raw.trim();
+  }
+  return CHAT_GENERIC_USER_ERROR;
+}
+
 export type Message = {
   id: string;
   role: "user" | "assistant";
@@ -160,10 +176,13 @@ export default function ChatLayout({ user }: Props) {
       if (ac.signal.aborted) return;
 
       if (!res.ok) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[chat history]", res.detail);
+        }
         setChats((prev) =>
           prev.map((c) =>
             c.id === chat.id
-              ? { ...c, historyLoaded: true, historyError: res.detail }
+              ? { ...c, historyLoaded: true, historyError: CHAT_GENERIC_USER_ERROR }
               : c,
           ),
         );
@@ -275,15 +294,21 @@ export default function ChatLayout({ user }: Props) {
     } = await supabase.auth.getSession();
 
     const fail = (message: string) => {
+      const display = displayChatFailureMessage(message);
+      if (
+        display === CHAT_GENERIC_USER_ERROR &&
+        message.trim() !== display &&
+        process.env.NODE_ENV === "development"
+      ) {
+        console.warn("[chat]", message);
+      }
       setChats((prev) =>
         prev.map((c) => {
           if (c.id !== requestChatId) return c;
           return {
             ...c,
             messages: c.messages.map((m) =>
-              m.id === thinkingId
-                ? { ...m, content: `**Error:** ${message}`, timestamp: new Date() }
-                : m,
+              m.id === thinkingId ? { ...m, content: display, timestamp: new Date() } : m,
             ),
           };
         }),
@@ -362,8 +387,7 @@ export default function ChatLayout({ user }: Props) {
               m.id === thinkingId
                 ? {
                     ...m,
-                    content:
-                      "**No response received.** Check that the backend is running and `GROQ_API_KEY` is set.",
+                    content: CHAT_GENERIC_USER_ERROR,
                     timestamp: new Date(),
                   }
                 : m,
@@ -385,7 +409,10 @@ export default function ChatLayout({ user }: Props) {
       if (session?.access_token) {
         const res = await softDeleteConversation(session.access_token, target.backendConversationId);
         if (!res.ok) {
-          setActionError(res.detail);
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[delete conversation]", res.detail);
+          }
+          setActionError(CHAT_GENERIC_USER_ERROR);
           return;
         }
       }

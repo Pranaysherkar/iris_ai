@@ -18,6 +18,7 @@ Desktop.ini
 *.p12
 *.pfx
 *.crt
+
 *.cer
 *.key
 *_rsa
