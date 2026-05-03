@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1 import chat, conversations
+from app.middleware.request_id import RequestIdMiddleware
 
 
 app = FastAPI(
@@ -15,15 +16,29 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Set up CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Conversation-Id"],
-)
+# CORS: set CORS_ORIGINS in .env for production (comma-separated). Empty => allow all (*),
+# with credentials disabled (browser-safe). Explicit origins enable credentials.
+if settings.cors_allow_all:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Conversation-Id", "X-Request-ID"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Conversation-Id", "X-Request-ID"],
+    )
+
+# Runs first on incoming requests (registered after CORS).
+app.add_middleware(RequestIdMiddleware)
 
 # Include Routers
 app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
@@ -32,6 +47,11 @@ app.include_router(conversations.router, prefix="/api/v1", tags=["Conversations"
 @app.get("/")
 async def root():
     return {"message": f"Welcome to {settings.APP_NAME} API"}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn

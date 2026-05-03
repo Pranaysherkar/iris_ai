@@ -5,6 +5,22 @@ from uuid import UUID
 from fastapi import HTTPException
 
 from app.core.supabase import get_supabase_admin_client
+from app.core.text_normalize import normalize_text
+
+DEFAULT_CONVERSATION_TITLE = "New Chat"
+# Legacy rows / older clients may use this string — still treated as auto-title placeholder.
+_PLACEHOLDER_TITLES = frozenset({DEFAULT_CONVERSATION_TITLE, "New conversation"})
+
+
+def conversation_title_from_first_message(content: str, max_len: int = 60) -> str:
+    """Single-line sidebar title from the first user message (ChatGPT-style truncation)."""
+    t = normalize_text(content)
+    if not t:
+        return ""
+    t = " ".join(t.split())
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1].rstrip() + "…"
 
 
 def _validate_conversation_uuid(conversation_id: str) -> str:
@@ -37,7 +53,7 @@ class ChatRepository:
 
         create_response = (
             supabase.table("conversations")
-            .insert({"user_id": user_id, "title": "New Chat"})
+            .insert({"user_id": user_id, "title": DEFAULT_CONVERSATION_TITLE})
             .execute()
         )
         if not create_response.data:
@@ -45,7 +61,7 @@ class ChatRepository:
         return str(create_response.data[0]["id"])
 
     def persist_user_message(self, conversation_id: str, user_id: str, content: str) -> None:
-        message_content = content.strip()
+        message_content = normalize_text(content)
         if not message_content:
             raise HTTPException(status_code=400, detail="User message content cannot be empty")
 
@@ -65,6 +81,160 @@ class ChatRepository:
         if not insert_response.data:
             raise HTTPException(status_code=500, detail="Failed to save user message")
 
+    def set_conversation_title_if_placeholder(
+        self,
+        conversation_id: str,
+        user_id: str,
+        first_user_message: str,
+    ) -> None:
+        """
+        When the row still has a default title, set it from the first user message
+        so the sidebar list shows a meaningful name after refresh.
+        """
+        derived = conversation_title_from_first_message(first_user_message)
+        if not derived:
+            return
+
+        supabase = get_supabase_admin_client()
+        current = (
+            supabase.table("conversations")
+            .select("title")
+            .eq("id", _validate_conversation_uuid(conversation_id))
+            .eq("user_id", user_id)
+            .is_("deleted_at", "null")
+            .limit(1)
+            .execute()
+        )
+        if not current.data:
+            return
+        raw_title = (current.data[0].get("title") or "").strip()
+        if raw_title not in _PLACEHOLDER_TITLES:
+            return
+
+        (
+            supabase.table("conversations")
+            .update({"title": derived})
+            .eq("id", conversation_id)
+            .eq("user_id", user_id)
+            .is_("deleted_at", "null")
+            .execute()
+        )
+
+    def conversation_title_is_placeholder(self, conversation_id: str, user_id: str) -> bool:
+        supabase = get_supabase_admin_client()
+        row = (
+            supabase.table("conversations")
+            .select("title")
+            .eq("id", _validate_conversation_uuid(conversation_id))
+            .eq("user_id", user_id)
+            .is_("deleted_at", "null")
+            .limit(1)
+            .execute()
+        )
+        if not row.data:
+            return False
+        raw = (row.data[0].get("title") or "").strip()
+        return raw in _PLACEHOLDER_TITLES
+
+    def count_messages_with_role(
+        self,
+        conversation_id: str,
+        user_id: str,
+        role: str,
+    ) -> int:
+        supabase = get_supabase_admin_client()
+        res = (
+            supabase.table("messages")
+            .select("id")
+            .eq("conversation_id", _validate_conversation_uuid(conversation_id))
+            .eq("user_id", user_id)
+            .eq("role", role)
+            .is_("deleted_at", "null")
+            .execute()
+        )
+        return len(res.data or [])
+
+    def get_first_message_content_for_role(
+        self,
+        conversation_id: str,
+        user_id: str,
+        role: str,
+    ) -> Optional[str]:
+        """Earliest non-deleted message for role (by seq_no)."""
+        supabase = get_supabase_admin_client()
+        res = (
+            supabase.table("messages")
+            .select("content")
+            .eq("conversation_id", _validate_conversation_uuid(conversation_id))
+            .eq("user_id", user_id)
+            .eq("role", role)
+            .is_("deleted_at", "null")
+            .order("seq_no", desc=False)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return None
+        return res.data[0].get("content")
+
+    def get_nth_message_content_for_role(
+        self,
+        conversation_id: str,
+        user_id: str,
+        role: str,
+        n: int,
+    ) -> Optional[str]:
+        """Nth message for role in chronological order (n is 1-based)."""
+        if n < 1:
+            return None
+        supabase = get_supabase_admin_client()
+        res = (
+            supabase.table("messages")
+            .select("role", "content")
+            .eq("conversation_id", _validate_conversation_uuid(conversation_id))
+            .eq("user_id", user_id)
+            .is_("deleted_at", "null")
+            .order("seq_no", desc=False)
+            .execute()
+        )
+        seq = [row["content"] for row in (res.data or []) if row.get("role") == role]
+        if len(seq) >= n:
+            return seq[n - 1]
+        return None
+
+    def replace_placeholder_title(self, conversation_id: str, user_id: str, new_title: str) -> None:
+        """Set conversation title when it is still a placeholder (e.g. AI-generated name)."""
+        t = normalize_text(new_title)
+        if not t:
+            return
+        if len(t) > 120:
+            t = t[:117].rstrip() + "…"
+
+        supabase = get_supabase_admin_client()
+        current = (
+            supabase.table("conversations")
+            .select("title")
+            .eq("id", _validate_conversation_uuid(conversation_id))
+            .eq("user_id", user_id)
+            .is_("deleted_at", "null")
+            .limit(1)
+            .execute()
+        )
+        if not current.data:
+            return
+        raw_title = (current.data[0].get("title") or "").strip()
+        if raw_title not in _PLACEHOLDER_TITLES:
+            return
+
+        (
+            supabase.table("conversations")
+            .update({"title": t})
+            .eq("id", conversation_id)
+            .eq("user_id", user_id)
+            .is_("deleted_at", "null")
+            .execute()
+        )
+
     def persist_assistant_message(
         self,
         conversation_id: str,
@@ -74,7 +244,7 @@ class ChatRepository:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
     ) -> None:
-        message_content = content.strip()
+        message_content = normalize_text(content)
         if not message_content:
             return
 

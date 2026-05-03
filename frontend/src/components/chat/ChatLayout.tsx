@@ -55,6 +55,25 @@ type Props = {
   user: { email?: string; id?: string } | null;
 };
 
+/** Matches backend `DEFAULT_CONVERSATION_TITLE` and legacy UI copy. */
+const DEFAULT_CHAT_TITLE = "New Chat";
+const PLACEHOLDER_TITLES = new Set(["New Chat", "New conversation"]);
+
+function isPlaceholderTitle(title: string | null | undefined): boolean {
+  const t = title?.trim() ?? "";
+  return t === "" || PLACEHOLDER_TITLES.has(t);
+}
+
+/** Same rules as backend `conversation_title_from_first_message` (60 chars). */
+const MAX_SIDEBAR_TITLE_LEN = 60;
+
+function titleFromFirstUserMessage(text: string): string {
+  const collapsed = text.trim().replace(/\s+/g, " ");
+  if (!collapsed) return DEFAULT_CHAT_TITLE;
+  if (collapsed.length <= MAX_SIDEBAR_TITLE_LEN) return collapsed;
+  return `${collapsed.slice(0, MAX_SIDEBAR_TITLE_LEN - 1)}…`;
+}
+
 function makeId() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -62,7 +81,7 @@ function makeId() {
 function createDraftChat(): Chat {
   return {
     id: makeId(),
-    title: "New conversation",
+    title: DEFAULT_CHAT_TITLE,
     messages: [],
     createdAt: new Date(),
   };
@@ -84,12 +103,18 @@ function mergeLoadedConversations(prev: Chat[], rows: ConversationListItemDto[])
 
   const fromApi: Chat[] = rows.map((row) => {
     const existing = prev.find((p) => p.backendConversationId === row.id);
-    if (existing) return existing;
+    const apiTitleRaw = row.title?.trim() ?? "";
+
+    if (existing) {
+      const nextTitle =
+        apiTitleRaw && !isPlaceholderTitle(apiTitleRaw) ? apiTitleRaw : existing.title;
+      return { ...existing, title: nextTitle };
+    }
 
     const createdAt = row.created_at ? new Date(row.created_at) : new Date();
     return {
       id: row.id,
-      title: row.title?.trim() ? row.title.trim() : "New conversation",
+      title: apiTitleRaw && !isPlaceholderTitle(apiTitleRaw) ? apiTitleRaw : DEFAULT_CHAT_TITLE,
       messages: [],
       createdAt,
       backendConversationId: row.id,
@@ -203,10 +228,8 @@ export default function ChatLayout({ user }: Props) {
           if (c.id !== chat.id) return c;
           const firstUser = mapped.find((m) => m.role === "user");
           const titleFromFirst =
-            firstUser && c.title === "New conversation"
-              ? firstUser.content.length > 42
-                ? `${firstUser.content.slice(0, 42)}…`
-                : firstUser.content
+            firstUser && isPlaceholderTitle(c.title)
+              ? titleFromFirstUserMessage(firstUser.content)
               : c.title;
           return {
             ...c,
@@ -280,9 +303,7 @@ export default function ChatLayout({ user }: Props) {
         return {
           ...c,
           historyLoaded: true,
-          title: isFirstUserMsg
-            ? trimmed.slice(0, 42) + (trimmed.length > 42 ? "…" : "")
-            : c.title,
+          title: isFirstUserMsg ? DEFAULT_CHAT_TITLE : c.title,
           messages: [...c.messages, userMsg, thinkingMsg],
         };
       }),
@@ -374,6 +395,11 @@ export default function ChatLayout({ user }: Props) {
             : c,
         ),
       );
+    }
+
+    const listRes = await fetchConversationList(session.access_token);
+    if (listRes.ok) {
+      setChats((prev) => mergeLoadedConversations(prev, listRes.conversations));
     }
 
     setChats((prev) =>
