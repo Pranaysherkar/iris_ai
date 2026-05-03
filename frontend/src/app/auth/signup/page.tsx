@@ -66,14 +66,15 @@ export default function SignUpPage() {
         <div className="brand">
           <div className="brand-gif-ring">
             <div className="brand-gif-inner">
-              <Image 
-                src="/iris.gif" 
-                alt="Iris" 
-                width={72} 
-                height={72} 
+              <Image
+                src="/iris.gif"
+                alt="Iris"
+                width={72}
+                height={72}
                 className="brand-gif"
-                unoptimized 
+                unoptimized
                 priority
+                style={{ width: "100%", height: "auto" }}
               />
             </div>
           </div>
@@ -369,7 +370,8 @@ const authStyles = `
   }
   .brand-gif {
     width: 100%;
-    height: 100%;
+    height: auto;
+    aspect-ratio: 1;
     object-fit: cover;
     display: block;
   }

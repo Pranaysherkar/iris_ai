@@ -64,7 +64,16 @@ export default function ChatArea({
             <div className="chat-header-brand">
               <div className="chat-header-logo-ring">
                 <div className="chat-header-logo-inner">
-                  <Image src={logoSrc} alt="Iris" width={22} height={22} unoptimized priority className="chat-header-logo" />
+                  <Image
+                  src={logoSrc}
+                  alt="Iris"
+                  width={22}
+                  height={22}
+                  unoptimized
+                  priority
+                  className="chat-header-logo"
+                  style={{ width: "auto", height: "auto" }}
+                />
                 </div>
               </div>
               <span className="chat-header-brand-name">Iris AI</span>
@@ -102,7 +111,16 @@ export default function ChatArea({
           <div className="empty-state">
             <div className="empty-logo-ring">
               <div className="empty-logo-inner">
-                <Image src={logoSrc} alt="Iris" width={64} height={64} unoptimized priority className="empty-logo" />
+                <Image
+                  src={logoSrc}
+                  alt="Iris"
+                  width={64}
+                  height={64}
+                  unoptimized
+                  priority
+                  className="empty-logo"
+                  style={{ width: "auto", height: "auto" }}
+                />
               </div>
             </div>
             <h1 className="empty-title">

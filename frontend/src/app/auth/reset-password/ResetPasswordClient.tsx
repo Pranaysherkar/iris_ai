@@ -126,7 +126,16 @@ export default function ResetPasswordClient() {
           <div className="brand">
             <div className="brand-gif-ring">
               <div className="brand-gif-inner">
-                <Image src="/iris.gif" alt="Iris" width={72} height={72} className="brand-gif" unoptimized priority />
+                <Image
+                  src="/iris.gif"
+                  alt="Iris"
+                  width={72}
+                  height={72}
+                  className="brand-gif"
+                  unoptimized
+                  priority
+                  style={{ width: "100%", height: "auto" }}
+                />
               </div>
             </div>
             <div className="brand-text">
@@ -159,7 +168,16 @@ export default function ResetPasswordClient() {
         <div className="brand">
           <div className="brand-gif-ring">
             <div className="brand-gif-inner">
-              <Image src="/iris.gif" alt="Iris" width={72} height={72} className="brand-gif" unoptimized priority />
+              <Image
+                  src="/iris.gif"
+                  alt="Iris"
+                  width={72}
+                  height={72}
+                  className="brand-gif"
+                  unoptimized
+                  priority
+                  style={{ width: "100%", height: "auto" }}
+                />
             </div>
           </div>
           <div className="brand-text">
@@ -382,7 +400,13 @@ const authStyles = `
     align-items: center;
     justify-content: center;
   }
-  .brand-gif { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .brand-gif {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    object-fit: cover;
+    display: block;
+  }
   .brand-text { display: flex; flex-direction: column; gap: 2px; }
   .brand-name {
     font-size: 20px;

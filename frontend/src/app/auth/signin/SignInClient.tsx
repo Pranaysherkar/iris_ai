@@ -122,6 +122,7 @@ export default function SignInClient() {
                 className="brand-gif"
                 unoptimized
                 priority
+                style={{ width: "100%", height: "auto" }}
               />
             </div>
           </div>
@@ -399,7 +400,8 @@ const authStyles = `
   }
   .brand-gif {
     width: 100%;
-    height: 100%;
+    height: auto;
+    aspect-ratio: 1;
     object-fit: cover;
     display: block;
   }

@@ -26,14 +26,15 @@ export default function Home() {
         <div className="brand-center">
           <div className="brand-gif-ring">
             <div className="brand-gif-inner">
-              <Image 
-                src="/iris.gif" 
-                alt="Iris" 
-                width={84} 
-                height={84} 
+              <Image
+                src="/iris.gif"
+                alt="Iris"
+                width={84}
+                height={84}
                 className="brand-gif"
-                unoptimized 
+                unoptimized
                 priority
+                style={{ width: "100%", height: "auto" }}
               />
             </div>
           </div>
@@ -165,7 +166,8 @@ export default function Home() {
         }
         .brand-gif {
           width: 100%;
-          height: 100%;
+          height: auto;
+          aspect-ratio: 1;
           object-fit: cover;
           display: block;
         }

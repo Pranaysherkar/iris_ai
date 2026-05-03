@@ -58,6 +58,7 @@ export default function MessageBubble({ message }: Props) {
             unoptimized
             priority
             className="msg-avatar-img"
+            style={{ width: 28, height: "auto" }}
           />
         </div>
       </div>
@@ -165,7 +166,12 @@ const bubbleStyles = `
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 0 12px rgba(124,106,255,0.2);
   }
-  .msg-avatar-img { border-radius: 50%; object-fit: cover; }
+  .msg-avatar-img {
+    border-radius: 50%;
+    object-fit: cover;
+    aspect-ratio: 1;
+    max-height: 28px;
+  }
 
   /* Bubbles */
   .msg-bubble {

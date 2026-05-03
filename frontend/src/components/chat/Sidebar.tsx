@@ -93,7 +93,16 @@ export default function Sidebar({
           <div className="sidebar-brand">
             <div className="sidebar-logo-ring">
               <div className="sidebar-logo-inner">
-                <Image src={logoSrc} alt="Iris" width={28} height={28} unoptimized priority className="sidebar-logo-gif" />
+                <Image
+                  src={logoSrc}
+                  alt="Iris"
+                  width={28}
+                  height={28}
+                  unoptimized
+                  priority
+                  className="sidebar-logo-gif"
+                  style={{ width: "auto", height: "auto" }}
+                />
               </div>
             </div>
             <span className="sidebar-brand-name">Iris AI</span>
