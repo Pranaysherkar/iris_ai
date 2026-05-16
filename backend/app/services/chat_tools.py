@@ -1,0 +1,167 @@
+"""Orchestrates preprocessing, memory, intent routing, and tool execution."""
+
+from __future__ import annotations
+
+import logging
+from typing import List, Optional, Tuple
+
+from app.core.config import settings
+from app.core.prompts import get_chat_system_prompt
+from app.core.tool_context import ToolRunContext
+from app.core.tool_schemas import Intent, RouteDecision, ToolResult
+from app.core.tokens import trim_messages_to_estimated_token_budget
+from app.repositories.conversation_state_repository import conversation_state_repository
+from app.services.context_builder import inject_memory_context, inject_tool_context
+from app.services.intent_router import route_user_message
+from app.services.memory_service import load_conversation_summary, load_user_facts
+from app.services.pending_tool_router import forced_route_from_follow_up
+from app.services.query_preprocessor import preprocess_query, pending_tool_from_metadata
+from app.services.tool_executor import execute_route
+
+logger = logging.getLogger(__name__)
+
+
+async def build_chat_model_messages(
+    history: List[dict],
+    user_message: str,
+    *,
+    user_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+) -> List[dict]:
+    """
+    Persona prompt → memory blocks → trimmed history → preprocess → route → tools.
+    """
+    system = {"role": "system", "content": get_chat_system_prompt()}
+    combined: List[dict] = [system, *history]
+
+    facts = load_user_facts(user_id) if user_id else {}
+    summary = (
+        load_conversation_summary(conversation_id, user_id)
+        if conversation_id and user_id
+        else None
+    )
+    combined = inject_memory_context(
+        combined,
+        user_facts=facts,
+        conversation_summary=summary,
+    )
+
+    trimmed = trim_messages_to_estimated_token_budget(
+        combined,
+        settings.CHAT_MAX_CONTEXT_TOKENS_ESTIMATE,
+    )
+
+    pending_meta = None
+    if conversation_id and user_id:
+        try:
+            meta = conversation_state_repository.get_metadata(conversation_id, user_id)
+            pending_meta = pending_tool_from_metadata(meta)
+        except Exception as exc:
+            logger.debug("pending_tool_load_skipped: %s", exc)
+
+    preprocessed = preprocess_query(
+        user_message,
+        trimmed,
+        pending_tool=pending_meta,
+    )
+
+    if preprocessed.routing_text != user_message:
+        logger.info(
+            "query_preprocessed original=%r routing=%r",
+            user_message[:80],
+            preprocessed.routing_text[:80],
+        )
+
+    if not settings.TOOLS_ENABLED:
+        return trimmed
+
+    decision = forced_route_from_follow_up(
+        user_message,
+        preprocessed,
+        pending_meta,
+    )
+    if decision is None:
+        decision = route_user_message(
+            user_message,
+            trimmed,
+            routing_text=preprocessed.routing_text,
+        )
+    else:
+        logger.info(
+            "intent_forced_follow_up intent=%s city=%r",
+            decision.intent.value,
+            decision.tool_args.get("city"),
+        )
+
+    if decision.clarify:
+        if (
+            conversation_id
+            and user_id
+            and decision.intent == Intent.LIVE_WEATHER
+        ):
+            try:
+                conversation_state_repository.set_pending_tool(
+                    conversation_id,
+                    user_id,
+                    intent=decision.intent.value,
+                    tool=decision.tool_name or "weather",
+                )
+            except Exception as exc:
+                logger.warning("pending_tool_set_failed: %s", exc)
+        return inject_tool_context(trimmed, clarification=decision)
+
+    if not decision.needs_tool:
+        return trimmed
+
+    ctx = ToolRunContext(user_id=user_id, conversation_id=conversation_id)
+    tool_result = await execute_route(decision, ctx)
+    if tool_result is None:
+        return trimmed
+
+    if tool_result.success and conversation_id and user_id:
+        try:
+            conversation_state_repository.clear_pending_tool(conversation_id, user_id)
+        except Exception:
+            pass
+
+    requested_place = (
+        preprocessed.follow_up_weather_city
+        or decision.tool_args.get("city")
+        or user_message
+    )
+
+    logger.info(
+        "tool_executed tool=%s success=%s city=%r",
+        tool_result.tool_name,
+        tool_result.success,
+        decision.tool_args.get("city"),
+    )
+    return inject_tool_context(
+        trimmed,
+        tool_result=tool_result,
+        user_requested_place=str(requested_place) if requested_place else None,
+    )
+
+
+async def resolve_tool_pipeline(
+    user_message: str,
+    history: Optional[List[dict]] = None,
+    *,
+    user_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    pending_tool: Optional[dict] = None,
+) -> Tuple[Optional[ToolResult], Optional[RouteDecision]]:
+    """Lower-level API for tests: route + execute without building full message list."""
+    pre = preprocess_query(user_message, history or [], pending_tool=pending_tool)
+    decision = forced_route_from_follow_up(user_message, pre, pending_tool)
+    if decision is None:
+        decision = route_user_message(
+            user_message,
+            history,
+            routing_text=pre.routing_text,
+        )
+    if decision.clarify or not decision.needs_tool:
+        return None, decision if decision.clarify else None
+    ctx = ToolRunContext(user_id=user_id, conversation_id=conversation_id)
+    result = await execute_route(decision, ctx)
+    return result, None

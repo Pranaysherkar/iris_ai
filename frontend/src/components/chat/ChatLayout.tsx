@@ -143,8 +143,15 @@ export default function ChatLayout({ user }: Props) {
   const [historyRetryTick, setHistoryRetryTick] = useState(0);
 
   const chatsRef = useRef(chats);
+  /** Supabase conversation UUID per local chat id (synced before fetch — avoids race on 2nd message). */
+  const backendIdByChatRef = useRef<Map<string, string>>(new Map());
   useLayoutEffect(() => {
     chatsRef.current = chats;
+    for (const c of chats) {
+      if (c.backendConversationId) {
+        backendIdByChatRef.current.set(c.id, c.backendConversationId);
+      }
+    }
   }, [chats]);
 
   // Initialize sidebar open state based on screen size
@@ -359,8 +366,10 @@ export default function ChatLayout({ user }: Props) {
       return;
     }
 
-    const backendConversationId = chatsRef.current.find((c) => c.id === requestChatId)
-      ?.backendConversationId;
+    const backendConversationId =
+      backendIdByChatRef.current.get(requestChatId) ??
+      chatsRef.current.find((c) => c.id === requestChatId)?.backendConversationId ??
+      undefined;
 
     const result = await streamChatCompletion(
       session.access_token,
@@ -387,6 +396,7 @@ export default function ChatLayout({ user }: Props) {
           );
         },
         onConversationId: (cid) => {
+          backendIdByChatRef.current.set(requestChatId, cid);
           setChats((prev) =>
             prev.map((c) =>
               c.id === requestChatId ? { ...c, backendConversationId: cid, historyLoaded: true } : c,
@@ -402,6 +412,7 @@ export default function ChatLayout({ user }: Props) {
     }
 
     if (result.conversationId) {
+      backendIdByChatRef.current.set(requestChatId, result.conversationId);
       setChats((prev) =>
         prev.map((c) =>
           c.id === requestChatId

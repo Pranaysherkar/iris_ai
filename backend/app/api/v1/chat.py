@@ -13,11 +13,11 @@ from app.core.chat_title_quality import (
     is_low_quality_generated_title,
     should_defer_title_from_first_exchange,
 )
-from app.core.prompts import get_chat_system_prompt
 from app.core.text_normalize import normalize_text
-from app.core.tokens import trim_messages_to_estimated_token_budget
 from app.repositories.chat_repository import chat_repository, conversation_title_from_first_message
 from app.services.ai_service import ai_service
+from app.services.chat_tools import build_chat_model_messages
+from app.services.memory_service import extract_and_persist_facts
 from app.services.moderation import moderate_user_input
 
 router = APIRouter()
@@ -88,16 +88,6 @@ def _load_conversation_memory(
     limit: int,
 ) -> List[dict]:
     return chat_repository.load_conversation_memory(conversation_id, user_id, limit)
-
-
-def _prepare_model_messages(history: List[dict]) -> List[dict]:
-    """Prepend system prompt and trim to estimated token budget."""
-    system = {"role": "system", "content": get_chat_system_prompt()}
-    combined: List[dict] = [system, *history]
-    return trim_messages_to_estimated_token_budget(
-        combined,
-        settings.CHAT_MAX_CONTEXT_TOKENS_ESTIMATE,
-    )
 
 
 async def _maybe_generate_ai_conversation_title(
@@ -264,7 +254,14 @@ async def chat_endpoint(
         rid,
     )
 
+    user_message_text = messages[-1].content
     _persist_user_message(conversation_id, user_id, messages)
+
+    extract_and_persist_facts(
+        user_id,
+        user_message_text,
+        conversation_id=conversation_id,
+    )
 
     formatted_messages = _load_conversation_memory(
         conversation_id,
@@ -274,7 +271,12 @@ async def chat_endpoint(
     if not formatted_messages:
         formatted_messages = [{"role": m.role, "content": m.content} for m in messages]
 
-    formatted_messages = _prepare_model_messages(formatted_messages)
+    formatted_messages = await build_chat_model_messages(
+        formatted_messages,
+        user_message_text,
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
 
     usage_holder: dict = {}
     return StreamingResponse(

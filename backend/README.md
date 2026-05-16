@@ -54,6 +54,15 @@ See `.env.example` for defaults and comments:
 - `CHAT_MODERATION_ENABLED` - When `true`, user messages are checked with the OpenAI Moderations API before calling Groq (requires `OPENAI_API_KEY`).
 - `CHAT_MODERATION_MODEL` - Moderation model id (default `omni-moderation-latest`).
 - `OPENAI_API_KEY` - Used only for moderation when enabled (not required for Groq chat).
+- `CHAT_MODERATION_FAIL_OPEN` - When `true` (default), chat continues if OpenAI moderation is rate-limited (429) or down.
+- `TOOLS_ENABLED` - Enable intent routing and tools before Groq (`true` by default). See `docs/TOOL_CALLS_ROADMAP.md`.
+- `TOOL_DATETIME_ENABLED` - Server date/time tool (no external API).
+- `TOOL_WEATHER_ENABLED` - Open-Meteo current weather (uses `OPEN_METEO_*` URLs; no API key).
+- `TOOL_WEB_SEARCH_ENABLED` / `TOOL_WEB_FETCH_ENABLED` - Ollama cloud web search/fetch (`OLLAMA_API_KEY`, `OLLAMA_WEB_SEARCH_BASE_URL`).
+- `TOOL_WEB_SEARCH_MAX_RESULTS` - Max hits per search (1–10, default 5).
+- `TOOL_WIKIPEDIA_ENABLED` / `TOOL_NEWS_RSS_ENABLED` / `TOOL_EXCHANGE_RATES_ENABLED` / `TOOL_USER_MEMORY_ENABLED` - Free API tools (no extra keys).
+- `TOOL_NEWS_RSS_FEEDS` - Comma-separated RSS URLs for headline tool.
+- `WIKIPEDIA_API_URL` / `FRANKFURTER_API_URL` - Optional overrides for encyclopedia and FX tools.
 - `CHAT_AI_TITLE_ENABLED` - If `true` (default), after the first full user + assistant exchange the API calls Groq once to set a short sidebar title (`CHAT_TITLE_MAX_WORDS`, default 4).
 
 ### Observability
