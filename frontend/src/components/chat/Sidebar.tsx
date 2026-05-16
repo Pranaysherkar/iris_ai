@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 import { irisLogoSrc, useUiTheme } from "@/lib/use-ui-theme";
@@ -22,16 +21,18 @@ function groupChatsByDate(chats: Chat[]) {
   const now = new Date();
   const today: Chat[] = [];
   const yesterday: Chat[] = [];
+  const week: Chat[] = [];
   const older: Chat[] = [];
 
   chats.forEach((c) => {
     const diff = Math.floor((now.getTime() - c.createdAt.getTime()) / 86400000);
     if (diff === 0) today.push(c);
     else if (diff === 1) yesterday.push(c);
+    else if (diff <= 7) week.push(c);
     else older.push(c);
   });
 
-  return { today, yesterday, older };
+  return { today, yesterday, week, older };
 }
 
 export default function Sidebar({
@@ -43,19 +44,30 @@ export default function Sidebar({
   onDeleteChat,
   user,
 }: Props) {
-  const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
   const [hoveredChat, setHoveredChat] = useState<string | null>(null);
 
-  const { today, yesterday, older } = groupChatsByDate(chats);
+  const { today, yesterday, week, older } = groupChatsByDate(chats);
   const uiTheme = useUiTheme();
   const logoSrc = irisLogoSrc(uiTheme);
 
   const handleSignOut = async () => {
+    if (signingOut) return;
     setSigningOut(true);
-    const supabase = createSupabaseBrowserClient();
-    await supabase.auth.signOut();
-    router.push("/auth/signin");
+
+    // Timeout fallback — if signOut hangs for >4s, hard-redirect anyway
+    const fallback = setTimeout(() => {
+      window.location.href = "/auth/signin";
+    }, 4000);
+
+    try {
+      const supabase = createSupabaseBrowserClient();
+      await supabase.auth.signOut();
+    } finally {
+      clearTimeout(fallback);
+      // Hard redirect: forces a full page reload so server clears session
+      window.location.href = "/auth/signin";
+    }
   };
 
   const userInitial = user?.email ? user.email[0].toUpperCase() : "U";
@@ -85,6 +97,14 @@ export default function Sidebar({
     </div>
   );
 
+  const ChatGroup = ({ label, items }: { label: string; items: Chat[] }) =>
+    items.length > 0 ? (
+      <div className="chat-group">
+        <span className="chat-group-label">{label}</span>
+        {items.map((c) => <ChatItem key={c.id} chat={c} />)}
+      </div>
+    ) : null;
+
   return (
     <>
       <aside className={`sidebar ${open ? "sidebar-open" : "sidebar-closed"}`}>
@@ -112,29 +132,17 @@ export default function Sidebar({
           </button>
         </div>
 
-        {/* Chat list — only threads with at least one user message (from parent) */}
-        <nav className="sidebar-nav">
+        {/* Chat list */}
+        <nav className="sidebar-nav" aria-label="Conversations">
           {chats.length === 0 && (
-            <p className="sidebar-empty-hint">No conversations yet</p>
-          )}
-          {today.length > 0 && (
-            <div className="chat-group">
-              <span className="chat-group-label">Today</span>
-              {today.map((c) => <ChatItem key={c.id} chat={c} />)}
+            <div className="sidebar-empty-state">
+              <p className="sidebar-empty-hint">Start a new conversation to get going.</p>
             </div>
           )}
-          {yesterday.length > 0 && (
-            <div className="chat-group">
-              <span className="chat-group-label">Yesterday</span>
-              {yesterday.map((c) => <ChatItem key={c.id} chat={c} />)}
-            </div>
-          )}
-          {older.length > 0 && (
-            <div className="chat-group">
-              <span className="chat-group-label">Older</span>
-              {older.map((c) => <ChatItem key={c.id} chat={c} />)}
-            </div>
-          )}
+          <ChatGroup label="Today" items={today} />
+          <ChatGroup label="Yesterday" items={yesterday} />
+          <ChatGroup label="This Week" items={week} />
+          <ChatGroup label="Older" items={older} />
         </nav>
 
         {/* Bottom: User profile */}
@@ -209,21 +217,45 @@ const sidebarStyles = `
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;
     background: #111116;
     border-right: 1px solid rgba(255,255,255,0.06);
-    transition: width 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.2s;
+    transition: width 0.28s cubic-bezier(0.4,0,0.2,1), transform 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.2s;
     overflow: hidden;
     flex-shrink: 0;
   }
   .sidebar-open  { width: 260px; opacity: 1; }
   .sidebar-closed { width: 0; opacity: 0; pointer-events: none; }
 
+  /* On mobile: sidebar overlays the chat area */
+  @media (max-width: 767px) {
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      height: 100dvh;
+      width: 280px !important;
+      transform: translateX(-100%);
+      box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+    }
+    .sidebar-open {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    .sidebar-closed {
+      transform: translateX(-100%);
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+
   /* Top */
   .sidebar-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 18px 16px 14px;
+    padding: 16px 14px 12px;
     flex-shrink: 0;
   }
   .sidebar-brand {
@@ -290,11 +322,18 @@ const sidebarStyles = `
     flex-direction: column;
     gap: 2px;
   }
+  .sidebar-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+    text-align: center;
+    gap: 8px;
+  }
   .sidebar-empty-hint {
     font-size: 12px;
     color: #4a4a60;
-    padding: 12px 10px;
-    line-height: 1.45;
+    line-height: 1.5;
   }
   .sidebar-nav::-webkit-scrollbar { width: 4px; }
   .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
@@ -359,7 +398,7 @@ const sidebarStyles = `
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 14px 12px;
+    padding: 12px;
     border-top: 1px solid rgba(255,255,255,0.06);
     flex-shrink: 0;
   }
@@ -369,6 +408,7 @@ const sidebarStyles = `
     gap: 10px;
     flex: 1;
     overflow: hidden;
+    min-width: 0;
   }
   .user-avatar {
     width: 30px; height: 30px;
@@ -385,6 +425,7 @@ const sidebarStyles = `
     flex-direction: column;
     gap: 1px;
     overflow: hidden;
+    min-width: 0;
   }
   .user-email {
     font-size: 12px;
@@ -417,33 +458,20 @@ const sidebarStyles = `
 
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  @media (max-width: 640px) {
-    .sidebar-open { width: 240px; }
-  }
-
   /* --- Light Theme Overrides --- */
   [data-theme="light"] .sidebar {
     background: #f8f9fa;
     border-right: 1px solid rgba(0,0,0,0.08);
   }
-  [data-theme="light"] .sidebar-brand-name {
-    color: #111118;
-  }
-  /* Logo capsule: one clear surface + subtle edge (avoid muddy blend with white bg) */
+  [data-theme="light"] .sidebar-brand-name { color: #111118; }
   [data-theme="light"] .sidebar-logo-ring {
     padding: 1.5px;
     box-shadow: 0 1px 5px rgba(124, 106, 255, 0.22);
-    background: linear-gradient(
-      135deg,
-      rgba(124, 106, 255, 0.88),
-      rgba(192, 132, 252, 0.85),
-      rgba(56, 189, 248, 0.85)
-    );
+    background: linear-gradient(135deg, rgba(124, 106, 255, 0.88), rgba(192, 132, 252, 0.85), rgba(56, 189, 248, 0.85));
   }
   [data-theme="light"] .sidebar-logo-inner {
     background: #f2f0ff;
     border: 1px solid rgba(124, 106, 255, 0.35);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 1px 3px rgba(0, 0, 0, 0.06);
   }
   [data-theme="light"] .new-chat-btn {
     background: #ffffff;
@@ -455,42 +483,19 @@ const sidebarStyles = `
     border-color: rgba(124,106,255,0.25);
     color: #6a5acd;
   }
-  [data-theme="light"] .sidebar-nav::-webkit-scrollbar-thumb {
-    background: rgba(0,0,0,0.1);
-  }
-  [data-theme="light"] .chat-group-label {
-    color: #8888a8;
-  }
-  [data-theme="light"] .sidebar-chat-item:hover {
-    background: rgba(0,0,0,0.04);
-  }
-  [data-theme="light"] .sidebar-chat-item.active {
-    background: rgba(124,106,255,0.1);
-  }
-  [data-theme="light"] .sidebar-chat-item.active .sidebar-chat-title {
-    color: #6a5acd;
-  }
-  [data-theme="light"] .sidebar-chat-title {
-    color: #55556a;
-  }
-  [data-theme="light"] .sidebar-chat-item:hover .sidebar-chat-title {
-    color: #111118;
-  }
-  [data-theme="light"] .sidebar-footer {
-    border-top: 1px solid rgba(0,0,0,0.08);
-  }
-  [data-theme="light"] .user-email {
-    color: #55556a;
-  }
-  [data-theme="light"] .user-plan {
-    color: #8888a8;
-  }
-  [data-theme="light"] .signout-btn {
-    border-color: rgba(0,0,0,0.1);
-    color: #66667a;
-  }
+  [data-theme="light"] .chat-group-label { color: #8888a8; }
+  [data-theme="light"] .sidebar-chat-item:hover { background: rgba(0,0,0,0.04); }
+  [data-theme="light"] .sidebar-chat-item.active { background: rgba(124,106,255,0.1); }
+  [data-theme="light"] .sidebar-chat-item.active .sidebar-chat-title { color: #6a5acd; }
+  [data-theme="light"] .sidebar-chat-title { color: #55556a; }
+  [data-theme="light"] .sidebar-chat-item:hover .sidebar-chat-title { color: #111118; }
+  [data-theme="light"] .sidebar-footer { border-top: 1px solid rgba(0,0,0,0.08); }
+  [data-theme="light"] .user-email { color: #55556a; }
+  [data-theme="light"] .user-plan { color: #8888a8; }
+  [data-theme="light"] .signout-btn { border-color: rgba(0,0,0,0.1); color: #66667a; }
   [data-theme="light"] .signout-btn:hover {
     background: rgba(248,113,113,0.1);
     border-color: rgba(248,113,113,0.3);
   }
+  [data-theme="light"] .sidebar-empty-hint { color: #8888a8; }
 `;

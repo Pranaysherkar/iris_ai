@@ -117,12 +117,12 @@ export default function SignInClient() {
               <Image
                 src="/iris.gif"
                 alt="Iris"
-                width={72}
-                height={72}
+                width={84}
+                height={52}
                 className="brand-gif"
                 unoptimized
                 priority
-                style={{ width: "100%", height: "auto" }}
+                style={{ width: "auto", height: "100%", objectFit: "contain" }}
               />
             </div>
           </div>
@@ -373,17 +373,17 @@ const authStyles = `
   .brand {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-bottom: 36px;
+    gap: 12px;
+    margin-bottom: 26px;
   }
   .brand-gif-ring {
-    align-self: stretch;
-    width: 72px;
+    width: 60px;
+    height: 38px;
     border-radius: 100px;
     background: linear-gradient(135deg, #7c6aff, #c084fc, #38bdf8);
-    padding: 2px;
+    padding: 1.5px;
     flex-shrink: 0;
-    box-shadow: 0 0 16px rgba(124, 106, 255, 0.4), 0 0 36px rgba(124, 106, 255, 0.12);
+    box-shadow: 0 0 12px rgba(124, 106, 255, 0.4), 0 0 28px rgba(124, 106, 255, 0.1);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -399,21 +399,20 @@ const authStyles = `
     justify-content: center;
   }
   .brand-gif {
-    width: 100%;
-    height: auto;
-    aspect-ratio: 1;
-    object-fit: cover;
+    height: 100%;
+    width: auto;
+    object-fit: contain;
     display: block;
   }
   .brand-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 0;
   }
   .brand-name {
-    font-size: 20px;
+    font-size: 16.5px;
     font-weight: 700;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.4px;
     background: linear-gradient(90deg, #c4b5fd, #a78bfa, #818cf8);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -421,23 +420,23 @@ const authStyles = `
     line-height: 1.2;
   }
   .brand-tag {
-    font-size: 10.5px;
+    font-size: 9px;
     color: #4a4a66;
     font-weight: 400;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
     text-transform: uppercase;
   }
 
-  .auth-header { margin-bottom: 28px; }
+  .auth-header { margin-bottom: 24px; }
   .auth-title {
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 600;
     color: #f1f1f3;
-    letter-spacing: -0.5px;
-    margin: 0 0 6px;
+    letter-spacing: -0.4px;
+    margin: 0 0 4px;
   }
   .auth-subtitle {
-    font-size: 14px;
+    font-size: 12.5px;
     color: #7a7a8a;
     margin: 0;
   }
@@ -474,7 +473,7 @@ const authStyles = `
     align-items: center;
   }
   .field-label {
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 500;
     color: #b0b0c0;
     letter-spacing: 0.1px;
@@ -506,12 +505,12 @@ const authStyles = `
   }
   .field-input {
     width: 100%;
-    padding: 11px 14px 11px 40px;
+    padding: 10px 14px 10px 38px;
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 10px;
+    border-radius: 9px;
     color: #f1f1f3;
-    font-size: 14px;
+    font-size: 13.5px;
     font-family: inherit;
     outline: none;
     transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
@@ -538,13 +537,13 @@ const authStyles = `
 
   .submit-btn {
     margin-top: 4px;
-    height: 44px;
+    height: 40px;
     width: 100%;
     background: linear-gradient(135deg, #7c6aff 0%, #9d8cff 100%);
     border: none;
-    border-radius: 10px;
+    border-radius: 9px;
     color: #fff;
-    font-size: 14px;
+    font-size: 13.5px;
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
@@ -594,16 +593,16 @@ const authStyles = `
   }
   .social-btn {
     flex: 1;
-    height: 42px;
+    height: 38px;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 10px;
+    border-radius: 9px;
     color: #b0b0c0;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
@@ -617,7 +616,7 @@ const authStyles = `
 
   .switch-auth {
     text-align: center;
-    font-size: 13px;
+    font-size: 12.5px;
     color: #5a5a70;
     margin: 0;
   }

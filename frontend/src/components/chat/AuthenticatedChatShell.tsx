@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { syncProfileFromUser } from "@/lib/supabase/profile";
 import ChatLayout from "@/components/chat/ChatLayout";
 
 export default function AuthenticatedChatShell() {
@@ -13,22 +14,32 @@ export default function AuthenticatedChatShell() {
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
 
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       if (!data.session) {
         router.replace("/auth/signin");
-      } else {
-        setUser(data.session.user);
-        setChecking(false);
+        return;
       }
+      const u = data.session.user;
+      const { error: profileErr } = await syncProfileFromUser(supabase, u);
+      if (profileErr) {
+        console.error("profiles sync from user metadata:", profileErr.message);
+      }
+      setUser(u);
+      setChecking(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!session) {
         router.replace("/auth/signin");
-      } else {
-        setUser(session.user);
-        setChecking(false);
+        return;
       }
+      if (event !== "TOKEN_REFRESHED") {
+        void syncProfileFromUser(supabase, session.user).then(({ error }) => {
+          if (error) console.error("profiles sync from user metadata:", error.message);
+        });
+      }
+      setUser(session.user);
+      setChecking(false);
     });
 
     return () => listener.subscription.unsubscribe();

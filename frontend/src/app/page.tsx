@@ -29,12 +29,12 @@ export default function Home() {
               <Image
                 src="/iris.gif"
                 alt="Iris"
-                width={84}
-                height={84}
+                width={120}
+                height={72}
                 className="brand-gif"
                 unoptimized
                 priority
-                style={{ width: "100%", height: "auto" }}
+                style={{ width: "auto", height: "100%", objectFit: "contain" }}
               />
             </div>
           </div>
@@ -145,7 +145,8 @@ export default function Home() {
           justify-content: center;
         }
         .brand-gif-ring {
-          width: 84px;
+          width: 120px;
+          height: 72px;
           border-radius: 100px;
           background: linear-gradient(135deg, #7c6aff, #c084fc, #38bdf8);
           padding: 2px;
@@ -165,10 +166,9 @@ export default function Home() {
           justify-content: center;
         }
         .brand-gif {
-          width: 100%;
-          height: auto;
-          aspect-ratio: 1;
-          object-fit: cover;
+          height: 100%;
+          width: auto;
+          object-fit: contain;
           display: block;
         }
 

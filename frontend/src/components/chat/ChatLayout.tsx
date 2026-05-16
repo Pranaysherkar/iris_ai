@@ -135,7 +135,8 @@ function mergeLoadedConversations(prev: Chat[], rows: ConversationListItemDto[])
 }
 
 export default function ChatLayout({ user }: Props) {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // On mobile, sidebar is closed by default; on desktop it's open
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chats, setChats] = useState<Chat[]>(() => [createDraftChat()]);
   const [activeChatId, setActiveChatId] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -145,6 +146,15 @@ export default function ChatLayout({ user }: Props) {
   useLayoutEffect(() => {
     chatsRef.current = chats;
   }, [chats]);
+
+  // Initialize sidebar open state based on screen size
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    setSidebarOpen(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setSidebarOpen(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
   /** Resolves invalid/stale `activeChatId` (e.g. after delete) without setState in an effect. */
   const effectiveActiveId = useMemo(() => {
@@ -266,6 +276,14 @@ export default function ChatLayout({ user }: Props) {
     });
     setActiveChatId(newDraft.id);
     setActionError(null);
+    // Close sidebar on mobile after selecting
+    if (window.innerWidth < 768) setSidebarOpen(false);
+  }, []);
+
+  const handleSelectChat = useCallback((id: string) => {
+    setActiveChatId(id);
+    // Close sidebar on mobile after selecting a chat
+    if (window.innerWidth < 768) setSidebarOpen(false);
   }, []);
 
   const handleSendMessage = useCallback(async (content: string) => {
@@ -463,17 +481,27 @@ export default function ChatLayout({ user }: Props) {
         <div className="chat-banner-error" role="alert">
           <span>{actionError}</span>
           <button type="button" onClick={() => setActionError(null)} className="chat-banner-dismiss">
-            Dismiss
+            ✕
           </button>
         </div>
       ) : null}
+
+      {/* Mobile overlay backdrop */}
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <div className="chat-main-row">
         <Sidebar
           open={sidebarOpen}
           onToggle={() => setSidebarOpen((v) => !v)}
           chats={sidebarChats}
           activeChatId={effectiveActiveId}
-          onSelectChat={setActiveChatId}
+          onSelectChat={handleSelectChat}
           onNewChat={handleNewChat}
           onDeleteChat={handleDeleteChat}
           user={user}
@@ -500,11 +528,54 @@ const layoutStyles = `
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  /* ── Custom Global Scrollbar ── */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(124, 106, 255, 0.2) transparent;
+  }
+
+  /* Chrome, Edge, Safari */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+    transition: background 0.2s;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(124, 106, 255, 0.4);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  [data-theme="light"] {
+    scrollbar-color: rgba(124, 106, 255, 0.3) transparent;
+  }
+  [data-theme="light"] *::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  [data-theme="light"] *::-webkit-scrollbar-thumb:hover {
+    background: rgba(124, 106, 255, 0.5);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
   .chat-root {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
+    max-width: 100vw;
     background: #0d0d10;
     font-family: 'Inter', system-ui, sans-serif;
     overflow: hidden;
@@ -517,31 +588,60 @@ const layoutStyles = `
     flex-direction: row;
     min-height: 0;
     min-width: 0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Mobile overlay backdrop */
+  .sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 15;
+    backdrop-filter: blur(2px);
+    animation: backdropFadeIn 0.2s ease;
+  }
+  @keyframes backdropFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .chat-banner-error {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
     gap: 12px;
-    padding: 10px 16px;
+    padding: 10px 20px;
     font-size: 13px;
     color: #fecaca;
-    background: rgba(127, 29, 29, 0.35);
-    border-bottom: 1px solid rgba(248, 113, 113, 0.25);
+    background: rgba(127, 29, 29, 0.4);
+    border-bottom: 1px solid rgba(248, 113, 113, 0.2);
+    backdrop-filter: blur(8px);
   }
   .chat-banner-dismiss {
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
     color: #fecaca;
     font-size: 12px;
-    padding: 4px 10px;
+    width: 24px;
+    height: 24px;
     border-radius: 6px;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.2s;
   }
   .chat-banner-dismiss:hover {
-    background: rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.18);
+  }
+
+  /* On mobile: sidebar floats over content */
+  @media (max-width: 767px) {
+    .sidebar-backdrop { display: block; }
   }
 
   [data-theme="light"] .chat-root {
@@ -555,5 +655,9 @@ const layoutStyles = `
   [data-theme="light"] .chat-banner-dismiss {
     color: #991b1b;
     border-color: rgba(0,0,0,0.1);
+    background: rgba(0,0,0,0.05);
+  }
+  [data-theme="light"] .sidebar-backdrop {
+    background: rgba(0, 0, 0, 0.3);
   }
 `;

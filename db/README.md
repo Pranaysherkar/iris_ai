@@ -16,6 +16,7 @@ Run files in this exact order in Supabase SQL Editor:
 8. `08_functions_and_triggers.sql`
 9. `09_rls_policies.sql`
 10. `10_tables_profiles.sql`
+11. `11_profiles_on_auth_user.sql` — syncs `profiles` from auth metadata on user signup (run once in SQL Editor)
 
 ## Notes
 

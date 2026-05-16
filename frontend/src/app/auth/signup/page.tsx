@@ -8,9 +8,12 @@ import { useState } from "react";
 import VerifyEmailModal from "@/components/auth/VerifyEmailModal";
 import { publicAppUrl } from "@/lib/site-url";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { upsertProfileRow } from "@/lib/supabase/profile";
 
 export default function SignUpPage() {
   const router = useRouter();
+  const [fullName, setFullName] = useState("");
+  const [dob, setDob] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -34,6 +37,10 @@ export default function SignUpPage() {
         password,
         options: {
           emailRedirectTo: publicAppUrl("/auth/signin?email_confirmed=1"),
+          data: {
+            full_name: fullName,
+            dob: dob,
+          }
         },
       });
 
@@ -42,8 +49,34 @@ export default function SignUpPage() {
         return;
       }
 
+      // Supabase returns a user with empty identities[] when the email
+      // already exists (it does NOT return an error for security reasons).
+      // Detect this and show a clear message instead of the misleading
+      // "verification link sent" modal.
+      const user = data.user;
+      if (
+        user &&
+        (!user.identities || user.identities.length === 0)
+      ) {
+        setErrorMessage(
+          "An account with this email already exists. Please sign in instead."
+        );
+        return;
+      }
+
       const session = data.session;
-      if (session) {
+      if (session?.user) {
+        const { error: profileError } = await upsertProfileRow(
+          supabase,
+          session.user.id,
+          fullName,
+          dob,
+          Boolean(session.user.email_confirmed_at),
+        );
+        if (profileError) {
+          setErrorMessage(profileError.message);
+          return;
+        }
         router.push("/chat");
         router.refresh();
       } else {
@@ -69,12 +102,12 @@ export default function SignUpPage() {
               <Image
                 src="/iris.gif"
                 alt="Iris"
-                width={72}
-                height={72}
+                width={84}
+                height={52}
                 className="brand-gif"
                 unoptimized
                 priority
-                style={{ width: "100%", height: "auto" }}
+                style={{ width: "auto", height: "100%", objectFit: "contain" }}
               />
             </div>
           </div>
@@ -95,6 +128,41 @@ export default function SignUpPage() {
               {errorMessage}
             </div>
           )}
+          {/* Full Name */}
+          <div className="field-group">
+            <label htmlFor="fullName" className="field-label">Full Name</label>
+            <div className="field-input-wrap">
+              <span className="field-icon"><UserIcon /></span>
+              <input
+                id="fullName"
+                type="text"
+                autoComplete="name"
+                required
+                placeholder="Enter your full name"
+                className="field-input"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* DOB */}
+          <div className="field-group">
+            <label htmlFor="dob" className="field-label">Date of Birth</label>
+            <div className="field-input-wrap">
+              <span className="field-icon"><CalendarIcon /></span>
+              <input
+                id="dob"
+                type="date"
+                required
+                className="field-input"
+                value={dob}
+                onChange={(e) => setDob(e.target.value)}
+                style={{ colorScheme: "dark" }}
+              />
+            </div>
+          </div>
+
           {/* Email */}
           <div className="field-group">
             <label htmlFor="email" className="field-label">Email</label>
@@ -212,6 +280,25 @@ export default function SignUpPage() {
 
       <style>{authStyles}</style>
     </div>
+  );
+}
+
+function UserIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+function CalendarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
   );
 }
 
@@ -343,17 +430,17 @@ const authStyles = `
   .brand {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-bottom: 36px;
+    gap: 12px;
+    margin-bottom: 26px;
   }
   .brand-gif-ring {
-    align-self: stretch;
-    width: 72px;
+    width: 60px;
+    height: 38px;
     border-radius: 100px;
     background: linear-gradient(135deg, #7c6aff, #c084fc, #38bdf8);
-    padding: 2px;
+    padding: 1.5px;
     flex-shrink: 0;
-    box-shadow: 0 0 16px rgba(124, 106, 255, 0.4), 0 0 36px rgba(124, 106, 255, 0.12);
+    box-shadow: 0 0 12px rgba(124, 106, 255, 0.4), 0 0 28px rgba(124, 106, 255, 0.1);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -369,21 +456,20 @@ const authStyles = `
     justify-content: center;
   }
   .brand-gif {
-    width: 100%;
-    height: auto;
-    aspect-ratio: 1;
-    object-fit: cover;
+    height: 100%;
+    width: auto;
+    object-fit: contain;
     display: block;
   }
   .brand-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 0;
   }
   .brand-name {
-    font-size: 20px;
+    font-size: 16.5px;
     font-weight: 700;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.4px;
     background: linear-gradient(90deg, #c4b5fd, #a78bfa, #818cf8);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -391,24 +477,24 @@ const authStyles = `
     line-height: 1.2;
   }
   .brand-tag {
-    font-size: 10.5px;
+    font-size: 9px;
     color: #4a4a66;
     font-weight: 400;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
     text-transform: uppercase;
   }
 
-  .auth-header { margin-bottom: 28px; }
+  .auth-header { margin-bottom: 24px; }
   .auth-title {
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 600;
     color: #f1f1f3;
-    letter-spacing: -0.5px;
-    margin: 0 0 6px;
+    letter-spacing: -0.4px;
+    margin: 0 0 4px;
   }
-  .auth-subtitle { font-size: 14px; color: #7a7a8a; margin: 0; }
+  .auth-subtitle { font-size: 12.5px; color: #7a7a8a; margin: 0; }
 
-  .auth-form { display: flex; flex-direction: column; gap: 16px; }
+  .auth-form { display: flex; flex-direction: column; gap: 14px; }
 
   .auth-alert {
     padding: 10px 12px;
@@ -427,18 +513,18 @@ const authStyles = `
     color: #c4b5fd;
   }
   .field-group { display: flex; flex-direction: column; gap: 7px; }
-  .field-label { font-size: 13px; font-weight: 500; color: #b0b0c0; }
+  .field-label { font-size: 12.5px; font-weight: 500; color: #b0b0c0; }
 
   .field-input-wrap { position: relative; display: flex; align-items: center; }
   .field-icon { position: absolute; left: 14px; color: #5a5a70; display: flex; pointer-events: none; }
   .field-input {
     width: 100%;
-    padding: 11px 14px 11px 40px;
+    padding: 10px 14px 10px 38px;
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 10px;
+    border-radius: 9px;
     color: #f1f1f3;
-    font-size: 14px;
+    font-size: 13.5px;
     font-family: inherit;
     outline: none;
     transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
@@ -488,10 +574,10 @@ const authStyles = `
   .terms-link:hover { color: #a78bfa; }
 
   .submit-btn {
-    margin-top: 4px; height: 44px; width: 100%;
+    margin-top: 4px; height: 40px; width: 100%;
     background: linear-gradient(135deg, #7c6aff 0%, #9d8cff 100%);
-    border: none; border-radius: 10px;
-    color: #fff; font-size: 14px; font-weight: 500; font-family: inherit;
+    border: none; border-radius: 9px;
+    color: #fff; font-size: 13.5px; font-weight: 500; font-family: inherit;
     cursor: pointer; display: flex; align-items: center; justify-content: center;
     letter-spacing: 0.1px;
     transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
@@ -523,12 +609,12 @@ const authStyles = `
 
   .social-row { display: flex; gap: 10px; margin-bottom: 24px; }
   .social-btn {
-    flex: 1; height: 42px;
+    flex: 1; height: 38px;
     display: flex; align-items: center; justify-content: center; gap: 8px;
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 10px;
-    color: #b0b0c0; font-size: 13px; font-weight: 500; font-family: inherit;
+    border-radius: 9px;
+    color: #b0b0c0; font-size: 12.5px; font-weight: 500; font-family: inherit;
     cursor: pointer;
     transition: background 0.2s, border-color 0.2s, color 0.2s;
   }
@@ -538,7 +624,7 @@ const authStyles = `
     color: #f1f1f3;
   }
 
-  .switch-auth { text-align: center; font-size: 13px; color: #5a5a70; margin: 0; }
+  .switch-auth { text-align: center; font-size: 12.5px; color: #5a5a70; margin: 0; }
   .switch-link { color: #7c6aff; text-decoration: none; font-weight: 500; transition: color 0.2s; }
   .switch-link:hover { color: #a78bfa; }
 
