@@ -1,0 +1,74 @@
+# Keep Supabase Free-tier project active (prevent 7-day auto-pause).
+#
+# Supabase pauses inactive Free Plan projects after ~7 days without sufficient
+# database/API activity. A few lightweight requests per day is enough.
+# Docs: https://supabase.com/docs/guides/platform/free-project-pausing
+#
+# Required GitHub repository secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL          — Project URL, e.g. https://xxxx.supabase.co (no trailing slash)
+#   SUPABASE_ANON_KEY     — Project Settings → API → anon public key
+#
+# Do NOT commit keys to this file. Use GitHub Secrets only.
+#
+# Manual test: Actions tab → "Keep Supabase alive" → Run workflow
+
+name: Keep Supabase alive
+
+on:
+  schedule:
+    # Daily at 18:30 UTC (~ midnight IST). Adjust cron if you prefer another window.
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-supabase-alive
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    name: Supabase heartbeat
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate secrets are configured
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "::error::Missing repository secret SUPABASE_URL"
+            exit 1
+          fi
+          if [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::Missing repository secret SUPABASE_ANON_KEY"
+            exit 1
+          fi
+          echo "Secrets present."
+
+      - name: Ping PostgREST (minimal DB read)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${SUPABASE_URL%/}"
+
+          # Lightweight SELECT (limit 0) — hits Postgres; RLS may return [] for anon (expected).
+          HTTP_CODE="$(curl -sS -o /tmp/supabase-ping-body.txt -w "%{http_code}" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -H "Accept: application/json" \
+            "${BASE}/rest/v1/profiles?select=id&limit=0")"
+
+          echo "PostgREST response: HTTP ${HTTP_CODE}"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Supabase REST ping failed (HTTP ${HTTP_CODE})"
+            head -c 500 /tmp/supabase-ping-body.txt || true
+            exit 1
+          fi
+
+          echo "Heartbeat OK — project received API/database activity."
