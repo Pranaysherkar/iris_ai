@@ -4,9 +4,19 @@ import { useState, useRef, KeyboardEvent } from "react";
 
 type Props = {
   onSend: (content: string) => Promise<void>;
+  onVoiceToggle?: () => Promise<void>;
+  voiceRecording?: boolean;
+  voiceBusy?: boolean;
+  disabled?: boolean;
 };
 
-export default function ChatInput({ onSend }: Props) {
+export default function ChatInput({
+  onSend,
+  onVoiceToggle,
+  voiceRecording = false,
+  voiceBusy = false,
+  disabled = false,
+}: Props) {
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -25,7 +35,7 @@ export default function ChatInput({ onSend }: Props) {
 
   const handleSend = async () => {
     const trimmed = value.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || disabled || voiceRecording) return;
     setValue("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -46,25 +56,58 @@ export default function ChatInput({ onSend }: Props) {
     }
   };
 
-  const canSend = value.trim().length > 0 && !sending;
+  const handleMicClick = async () => {
+    if (!onVoiceToggle || voiceBusy || sending) return;
+    await onVoiceToggle();
+  };
+
+  const inputLocked = sending || disabled || voiceBusy;
+  const canSend = value.trim().length > 0 && !inputLocked && !voiceRecording;
+  const micActive = voiceRecording;
+  const showMic = Boolean(onVoiceToggle);
 
   return (
     <div className="chat-input-outer">
-      <div className={`chat-input-wrap ${sending ? "sending" : ""}`}>
-        {/* Textarea */}
+      <div className={`chat-input-wrap ${inputLocked ? "sending" : ""}`}>
+        {showMic ? (
+          <button
+            type="button"
+            className={`mic-btn ${micActive ? "mic-btn-active" : ""} ${voiceBusy ? "mic-btn-busy" : ""}`}
+            onClick={handleMicClick}
+            disabled={voiceBusy || sending}
+            aria-label={
+              voiceBusy
+                ? "Processing voice"
+                : micActive
+                  ? "Stop recording and send"
+                  : "Start voice message"
+            }
+            title={
+              voiceBusy
+                ? "Processing…"
+                : micActive
+                  ? "Tap to send"
+                  : "Voice message"
+            }
+          >
+            {voiceBusy ? <SpinnerIcon /> : <MicIcon active={micActive} />}
+          </button>
+        ) : null}
+
         <textarea
           ref={textareaRef}
           className="chat-textarea"
-          placeholder="Message Iris…"
+          placeholder={
+            micActive ? "Listening… tap mic when done" : voiceBusy ? "Iris is responding…" : "Message Iris…"
+          }
           value={value}
           rows={1}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          disabled={sending}
+          disabled={inputLocked || voiceRecording}
           aria-label="Chat message input"
         />
 
-        {/* Send button */}
         <button
           className={`send-btn ${canSend ? "send-btn-active" : ""}`}
           onClick={handleSend}
@@ -75,14 +118,30 @@ export default function ChatInput({ onSend }: Props) {
         </button>
       </div>
       <p className="input-hint">
-        Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+        {micActive ? (
+          <>Tap <kbd>mic</kbd> again to send your voice message</>
+        ) : (
+          <>
+            Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+            {showMic ? <> · <kbd>mic</kbd> for voice</> : null}
+          </>
+        )}
       </p>
       <style>{inputStyles}</style>
     </div>
   );
 }
 
-/* ── Icons ── */
+function MicIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="22" />
+    </svg>
+  );
+}
+
 function SendIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -94,7 +153,6 @@ function SpinnerIcon() {
   return <span className="input-spinner" />;
 }
 
-/* ── Styles ── */
 const inputStyles = `
   .chat-input-outer {
     padding: 10px clamp(12px, 4vw, 24px) 16px;
@@ -121,8 +179,43 @@ const inputStyles = `
     background: rgba(255,255,255,0.06);
   }
   .chat-input-wrap.sending {
+    opacity: 0.85;
+  }
+
+  .mic-btn {
+    width: 38px; height: 38px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #8a8aa8;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+  }
+  .mic-btn:hover:not(:disabled) {
+    background: rgba(124,106,255,0.12);
+    color: #c4b5fd;
+    border-color: rgba(124,106,255,0.35);
+  }
+  .mic-btn-active {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.45);
+    color: #f87171;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
+    animation: mic-pulse 1.2s ease-in-out infinite;
+  }
+  .mic-btn-busy {
+    cursor: wait;
     opacity: 0.7;
-    pointer-events: none;
+  }
+  .mic-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+  @keyframes mic-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
   }
 
   .chat-textarea {
@@ -140,6 +233,7 @@ const inputStyles = `
     padding: 0;
   }
   .chat-textarea::placeholder { color: #4a4a60; }
+  .chat-textarea:disabled { opacity: 0.65; }
 
   .send-btn {
     width: 38px; height: 38px;
@@ -197,10 +291,9 @@ const inputStyles = `
     .chat-input-outer { padding: 8px 12px 12px; }
     .input-hint { display: none; }
     .chat-input-wrap { padding: 10px 10px 10px 14px; border-radius: 14px; }
-    .send-btn { width: 36px; height: 36px; border-radius: 10px; }
+    .send-btn, .mic-btn { width: 36px; height: 36px; border-radius: 10px; }
   }
 
-  /* --- Light Theme Overrides --- */
   [data-theme="light"] .chat-input-wrap {
     background: #ffffff;
     border-color: rgba(0,0,0,0.1);
@@ -213,6 +306,11 @@ const inputStyles = `
   }
   [data-theme="light"] .chat-textarea { color: #111118; }
   [data-theme="light"] .chat-textarea::placeholder { color: #9090a8; }
+  [data-theme="light"] .mic-btn {
+    background: rgba(0,0,0,0.03);
+    border-color: rgba(0,0,0,0.08);
+    color: #66667a;
+  }
   [data-theme="light"] .send-btn {
     background: rgba(0,0,0,0.03);
     border-color: rgba(0,0,0,0.08);

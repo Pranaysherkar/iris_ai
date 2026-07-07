@@ -49,6 +49,10 @@ class AIService:
         self,
         messages: List[Dict[str, str]],
         usage_holder: Optional[dict] = None,
+        *,
+        max_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Handles streaming chat responses from the LLM.
@@ -62,7 +66,24 @@ class AIService:
                 yield "data: [DONE]\n\n"
                 return
 
-            response_gen = await self.llm.astream_chat(llama_messages)
+            stream_kwargs: dict = {}
+            if max_tokens is not None:
+                stream_kwargs["max_tokens"] = max_tokens
+            if temperature is not None:
+                stream_kwargs["temperature"] = temperature
+
+            llm = self.llm
+            if model and model != settings.GROQ_MODEL:
+                llm = Groq(
+                    model=model,
+                    api_key=settings.GROQ_API_KEY,
+                    temperature=temperature if temperature is not None else settings.AI_TEMPERATURE,
+                    max_tokens=max_tokens if max_tokens is not None else settings.AI_MAX_TOKENS,
+                    top_p=settings.AI_TOP_P,
+                    timeout=float(settings.GROQ_HTTP_TIMEOUT_SECONDS),
+                )
+
+            response_gen = await llm.astream_chat(llama_messages, **stream_kwargs)
 
             async for chunk in response_gen:
                 if usage_holder is not None and getattr(chunk, "additional_kwargs", None):

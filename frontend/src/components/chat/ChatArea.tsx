@@ -12,6 +12,9 @@ type Props = {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onSendMessage: (content: string) => Promise<void>;
+  onVoiceToggle?: () => Promise<void>;
+  voiceRecording?: boolean;
+  voiceBusy?: boolean;
   userFirstName?: string;
   historyLoading?: boolean;
   historyError?: string | null;
@@ -82,6 +85,9 @@ export default function ChatArea({
   sidebarOpen,
   onToggleSidebar,
   onSendMessage,
+  onVoiceToggle,
+  voiceRecording = false,
+  voiceBusy = false,
   userFirstName,
   historyLoading = false,
   historyError = null,
@@ -205,7 +211,13 @@ export default function ChatArea({
       </div>
 
       {/* Input */}
-      <ChatInput onSend={onSendMessage} />
+      <ChatInput
+        onSend={onSendMessage}
+        onVoiceToggle={onVoiceToggle}
+        voiceRecording={voiceRecording}
+        voiceBusy={voiceBusy}
+        disabled={voiceBusy}
+      />
 
       <style>{chatAreaStyles}</style>
     </main>

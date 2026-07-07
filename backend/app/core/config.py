@@ -105,6 +105,68 @@ class Settings(BaseSettings):
     AI_TEMPERATURE: float = 0.7
     AI_MAX_TOKENS: int = 2048
     AI_TOP_P: float = 0.9
+
+    # --- Speech / voice chat ---
+    SPEECH_ENABLED: bool = True
+    """Primary speech locale (BCP-47). en-IN = Indian English for STT + TTS."""
+    SPEECH_LANGUAGE: str = "en-IN"
+    SPEECH_HTTP_TIMEOUT_SECONDS: float = 60.0
+    SPEECH_SKIP_MODERATION: bool = True
+    VOICE_MAX_TOKENS: int = 80
+    VOICE_TTS_MIN_SENTENCE_CHARS: int = 10
+    VOICE_TOOLS_ENABLED: bool = False
+    GROQ_VOICE_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
+
+    SARVAM_API_KEY: Optional[str] = None
+    SARVAM_STT_ENABLED: bool = True
+    SARVAM_STT_MODEL: str = "saaras:v3"
+    SARVAM_STT_LANGUAGE: str = "en-IN"
+    SARVAM_STT_MODE: str = "transcribe"
+
+    SARVAM_TTS_ENABLED: bool = True
+    SARVAM_TTS_MODEL: str = "bulbul:v3"
+    SARVAM_TTS_SPEAKER: str = "shubh"
+    SARVAM_TTS_LANGUAGE: str = "en-IN"
+    SARVAM_TTS_PACE: float = 1.0
+    SARVAM_TTS_TEMPERATURE: float = 0.6
+    SARVAM_TTS_SAMPLE_RATE: int = 24000
+    SARVAM_TTS_OUTPUT_CODEC: str = "wav"
+
+    TTS_FALLBACK_EDGE_ENABLED: bool = True
+    EDGE_TTS_VOICE: str = "en-IN-PrabhatNeural"
+    EDGE_TTS_RATE: str = "+0%"
+
+    @property
+    def sarvam_configured(self) -> bool:
+        key = (self.SARVAM_API_KEY or "").strip()
+        return bool(key) and key not in ("your-sarvam-key", "your_api_key_here")
+
+    @property
+    def speech_stt_language(self) -> str:
+        return (self.SPEECH_LANGUAGE or self.SARVAM_STT_LANGUAGE or "en-IN").strip()
+
+    @property
+    def speech_tts_language(self) -> str:
+        return (self.SPEECH_LANGUAGE or self.SARVAM_TTS_LANGUAGE or "en-IN").strip()
+
+    @property
+    def speech_stt_mode(self) -> str:
+        """English-only uses transcribe; codemix/translate only for non-English locales."""
+        lang = self.speech_stt_language.lower()
+        if lang.startswith("en"):
+            return "transcribe"
+        return (self.SARVAM_STT_MODE or "transcribe").strip()
+
+    @property
+    def groq_whisper_language(self) -> str | None:
+        """ISO-639-1 hint for Groq Whisper fallback."""
+        lang = self.speech_stt_language.lower()
+        if lang.startswith("en"):
+            return "en"
+        if lang.startswith("hi"):
+            return "hi"
+        return None
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

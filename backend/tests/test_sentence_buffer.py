@@ -1,0 +1,19 @@
+"""Tests for speech sentence buffering."""
+
+from app.services.speech.sentence_buffer import flush_remainder, flush_sentence, sentence_complete
+
+
+def test_sentence_complete_requires_punctuation_and_length():
+    assert not sentence_complete("Hello there")
+    assert sentence_complete("Hello there friend.")
+
+
+def test_flush_sentence_returns_completed_and_clears_buffer():
+    completed, remaining = flush_sentence("It is sunny today.")
+    assert completed == "It is sunny today."
+    assert remaining == ""
+
+
+def test_flush_remainder_short_text():
+    assert flush_remainder("Hi") is None
+    assert flush_remainder("Sure thing") == "Sure thing"

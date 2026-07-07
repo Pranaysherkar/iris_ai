@@ -9,6 +9,9 @@ import {
   type ConversationListItemDto,
 } from "@/lib/api/conversations";
 import { streamChatCompletion } from "@/lib/api/chat";
+import { streamSpeechChat } from "@/lib/api/speech";
+import { AudioPlaybackQueue } from "@/lib/voice/audio-playback-queue";
+import { VoiceRecorder } from "@/lib/voice/voice-recorder";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 
 import Sidebar from "./Sidebar";
@@ -35,6 +38,8 @@ export type Message = {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  /** How the user message was captured (shown in bubble). */
+  inputMode?: "text" | "voice";
 };
 
 /** Local UI id + optional Supabase conversation UUID returned by the API (`X-Conversation-Id`). */
@@ -145,6 +150,13 @@ export default function ChatLayout({ user }: Props) {
   const chatsRef = useRef(chats);
   /** Supabase conversation UUID per local chat id (synced before fetch — avoids race on 2nd message). */
   const backendIdByChatRef = useRef<Map<string, string>>(new Map());
+  const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
+  const audioQueueRef = useRef<AudioPlaybackQueue | null>(null);
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+
+  if (!voiceRecorderRef.current) voiceRecorderRef.current = new VoiceRecorder();
+  if (!audioQueueRef.current) audioQueueRef.current = new AudioPlaybackQueue();
   useLayoutEffect(() => {
     chatsRef.current = chats;
     for (const c of chats) {
@@ -454,6 +466,234 @@ export default function ChatLayout({ user }: Props) {
     );
   }, [activeChatId]);
 
+  const finishVoiceTurn = useCallback(async () => {
+    await audioQueueRef.current?.whenIdle();
+    setVoiceBusy(false);
+  }, []);
+
+  const handleVoiceToggle = useCallback(async () => {
+    if (voiceBusy) return;
+
+    const recorder = voiceRecorderRef.current!;
+    const audioQueue = audioQueueRef.current!;
+
+    if (!voiceRecording) {
+      setActionError(null);
+      try {
+        await recorder.start();
+        setVoiceRecording(true);
+      } catch {
+        setActionError("Microphone access was denied. Allow mic permission and try again.");
+      }
+      return;
+    }
+
+    setVoiceRecording(false);
+    setVoiceBusy(true);
+
+    const list = chatsRef.current;
+    const requestChatId =
+      activeChatId && list.some((c) => c.id === activeChatId)
+        ? activeChatId
+        : (list.find(showChatInSidebar) ?? list[0])?.id ?? "";
+    if (!requestChatId) {
+      recorder.cancel();
+      setVoiceBusy(false);
+      return;
+    }
+
+    let audioBlob: Blob;
+    try {
+      const recorded = await recorder.stop();
+      audioBlob = recorded.blob;
+    } catch {
+      setActionError("Could not capture audio. Please try again.");
+      setVoiceBusy(false);
+      return;
+    }
+
+    if (audioBlob.size < 800) {
+      setActionError("Recording too short. Hold the mic a little longer.");
+      setVoiceBusy(false);
+      return;
+    }
+
+    const userMsgId = makeId();
+    const thinkingId = makeId();
+    const userMsg: Message = {
+      id: userMsgId,
+      role: "user",
+      content: "Transcribing…",
+      timestamp: new Date(),
+      inputMode: "voice",
+    };
+    const thinkingMsg: Message = {
+      id: thinkingId,
+      role: "assistant",
+      content: "__thinking__",
+      timestamp: new Date(),
+    };
+
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== requestChatId) return c;
+        const isFirstUserMsg = c.messages.filter((m) => m.role === "user").length === 0;
+        return {
+          ...c,
+          historyLoaded: true,
+          title: isFirstUserMsg ? DEFAULT_CHAT_TITLE : c.title,
+          messages: [...c.messages, userMsg, thinkingMsg],
+        };
+      }),
+    );
+
+    const supabase = createSupabaseBrowserClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    const fail = (message: string) => {
+      const display = displayChatFailureMessage(message);
+      if (
+        display === CHAT_GENERIC_USER_ERROR &&
+        message.trim() !== display &&
+        process.env.NODE_ENV === "development"
+      ) {
+        console.warn("[voice chat]", message);
+      }
+      audioQueue.stop();
+      setChats((prev) =>
+        prev.map((c) => {
+          if (c.id !== requestChatId) return c;
+          return {
+            ...c,
+            messages: c.messages
+              .map((m) => {
+                if (m.id === thinkingId) {
+                  return { ...m, content: display, timestamp: new Date() };
+                }
+                if (m.id === userMsgId && m.content === "Transcribing…") {
+                  return null;
+                }
+                return m;
+              })
+              .filter((m): m is Message => m !== null),
+          };
+        }),
+      );
+    };
+
+    if (!session?.access_token) {
+      fail("You are not signed in. Please sign in again.");
+      setVoiceBusy(false);
+      return;
+    }
+
+    const backendConversationId =
+      backendIdByChatRef.current.get(requestChatId) ??
+      chatsRef.current.find((c) => c.id === requestChatId)?.backendConversationId ??
+      undefined;
+
+    audioQueue.stop();
+
+    const result = await streamSpeechChat(
+      session.access_token,
+      audioBlob,
+      {
+        onTranscript: (text) => {
+          setChats((prev) =>
+            prev.map((c) => {
+              if (c.id !== requestChatId) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === userMsgId ? { ...m, content: text, inputMode: "voice" } : m,
+                ),
+              };
+            }),
+          );
+        },
+        onConversationId: (cid) => {
+          backendIdByChatRef.current.set(requestChatId, cid);
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === requestChatId
+                ? { ...c, backendConversationId: cid, historyLoaded: true }
+                : c,
+            ),
+          );
+        },
+        onToken: (delta) => {
+          setChats((prev) =>
+            prev.map((c) => {
+              if (c.id !== requestChatId) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) => {
+                  if (m.id !== thinkingId) return m;
+                  if (m.content === "__thinking__") {
+                    return { ...m, content: delta, timestamp: new Date() };
+                  }
+                  return { ...m, content: m.content + delta, timestamp: new Date() };
+                }),
+              };
+            }),
+          );
+        },
+        onAudio: (chunk) => {
+          audioQueue.enqueueBase64(chunk.data, chunk.mime);
+        },
+      },
+      backendConversationId ?? undefined,
+    );
+
+    if (result.error) {
+      fail(result.error);
+      setVoiceBusy(false);
+      return;
+    }
+
+    if (result.conversationId) {
+      backendIdByChatRef.current.set(requestChatId, result.conversationId);
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === requestChatId
+            ? {
+                ...c,
+                backendConversationId: result.conversationId ?? c.backendConversationId,
+                historyLoaded: true,
+              }
+            : c,
+        ),
+      );
+    }
+
+    const listRes = await fetchConversationList(session.access_token);
+    if (listRes.ok) {
+      setChats((prev) => mergeLoadedConversations(prev, listRes.conversations));
+    }
+
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== requestChatId) return c;
+        const thinking = c.messages.find((m) => m.id === thinkingId);
+        if (thinking?.content === "__thinking__") {
+          return {
+            ...c,
+            messages: c.messages.map((m) =>
+              m.id === thinkingId
+                ? { ...m, content: CHAT_GENERIC_USER_ERROR, timestamp: new Date() }
+                : m,
+            ),
+          };
+        }
+        return c;
+      }),
+    );
+
+    await finishVoiceTurn();
+  }, [activeChatId, voiceBusy, voiceRecording, finishVoiceTurn]);
+
   const handleDeleteChat = useCallback(async (chatId: string) => {
     const target = chatsRef.current.find((c) => c.id === chatId);
     if (target?.backendConversationId) {
@@ -523,6 +763,9 @@ export default function ChatLayout({ user }: Props) {
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             onSendMessage={handleSendMessage}
+            onVoiceToggle={handleVoiceToggle}
+            voiceRecording={voiceRecording}
+            voiceBusy={voiceBusy}
             historyLoading={historyLoading}
             historyError={activeChat.historyError ?? null}
             onRetryHistory={handleRetryHistory}

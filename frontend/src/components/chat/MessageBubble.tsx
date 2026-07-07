@@ -80,6 +80,15 @@ function CheckIcon() {
   );
 }
 
+function MicBadgeIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    </svg>
+  );
+}
+
 export default function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
   const isThinking = message.content === "__thinking__";
@@ -88,6 +97,11 @@ export default function MessageBubble({ message }: Props) {
     return (
       <div className="msg-row msg-row-user">
         <div className="msg-bubble msg-bubble-user">
+          {message.inputMode === "voice" ? (
+            <span className="msg-voice-badge" title="Voice message">
+              <MicBadgeIcon />
+            </span>
+          ) : null}
           <p className="msg-text">{message.content}</p>
         </div>
         <style>{bubbleStyles}</style>
@@ -266,6 +280,21 @@ const bubbleStyles = `
     box-shadow: 0 4px 20px rgba(124,106,255,0.25);
     max-width: min(72%, 520px);
     flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .msg-voice-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.95);
+    flex-shrink: 0;
+    margin-top: 1px;
   }
   .msg-bubble-assistant {
     background: transparent;

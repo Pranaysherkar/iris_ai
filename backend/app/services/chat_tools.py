@@ -6,7 +6,7 @@ import logging
 from typing import List, Optional, Tuple
 
 from app.core.config import settings
-from app.core.prompts import get_chat_system_prompt
+from app.core.prompts import get_chat_system_prompt, get_voice_mode_prompt
 from app.core.tool_context import ToolRunContext
 from app.core.tool_schemas import Intent, RouteDecision, ToolResult
 from app.core.tokens import trim_messages_to_estimated_token_budget
@@ -27,11 +27,15 @@ async def build_chat_model_messages(
     *,
     user_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
+    voice_mode: bool = False,
 ) -> List[dict]:
     """
     Persona prompt → memory blocks → trimmed history → preprocess → route → tools.
     """
-    system = {"role": "system", "content": get_chat_system_prompt()}
+    system_content = get_chat_system_prompt()
+    if voice_mode:
+        system_content = f"{system_content}\n\n{get_voice_mode_prompt()}"
+    system = {"role": "system", "content": system_content}
     combined: List[dict] = [system, *history]
 
     facts = load_user_facts(user_id) if user_id else {}
@@ -73,6 +77,9 @@ async def build_chat_model_messages(
         )
 
     if not settings.TOOLS_ENABLED:
+        return trimmed
+
+    if voice_mode and not settings.VOICE_TOOLS_ENABLED:
         return trimmed
 
     decision = forced_route_from_follow_up(

@@ -34,3 +34,17 @@ def get_chat_system_prompt() -> str:
 
 def get_tool_grounding_prompt() -> str:
     return _TOOL_GROUNDING
+
+
+_VOICE_MODE_ADDENDUM = (
+    "VOICE MODE: The user is speaking via microphone in English. "
+    "Reply in English only, in 1–2 short spoken sentences plus optional code. "
+    "Use plain language suitable for text-to-speech. "
+    "If you include code, put it in a fenced markdown block; only the surrounding explanation "
+    "will be spoken aloud — never read code, tags, or syntax out loud. "
+    "No bullet lists unless essential."
+)
+
+
+def get_voice_mode_prompt() -> str:
+    return _VOICE_MODE_ADDENDUM
