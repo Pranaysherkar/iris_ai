@@ -36,6 +36,9 @@ export async function streamChatCompletion(
   if (body.conversation_id) {
     payload.conversation_id = body.conversation_id;
   }
+  if (body.attachment_ids && body.attachment_ids.length > 0) {
+    payload.attachment_ids = body.attachment_ids;
+  }
 
   let response: Response;
   try {

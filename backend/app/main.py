@@ -6,7 +6,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.v1 import chat, conversations, speech
+from app.api.v1 import attachments, chat, conversations, speech
 from app.middleware.request_id import RequestIdMiddleware
 
 
@@ -44,6 +44,7 @@ app.add_middleware(RequestIdMiddleware)
 app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["Conversations"])
 app.include_router(speech.router, prefix="/api/v1", tags=["Speech"])
+app.include_router(attachments.router, prefix="/api/v1", tags=["Attachments"])
 
 @app.get("/")
 async def root():

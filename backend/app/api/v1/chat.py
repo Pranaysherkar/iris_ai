@@ -32,6 +32,8 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     conversation_id: Optional[str] = None
+    """Attachment IDs to ground this turn (RAG). Also triggered by @mentions in text."""
+    attachment_ids: Optional[List[str]] = None
 
 
 def _validate_and_normalize_messages(messages: List[ChatMessage]) -> List[ChatMessage]:
@@ -276,6 +278,7 @@ async def chat_endpoint(
         user_message_text,
         user_id=user_id,
         conversation_id=conversation_id,
+        attachment_ids=payload.attachment_ids,
     )
 
     usage_holder: dict = {}

@@ -1,4 +1,4 @@
-"""Deterministic intent matching (no LLM). High precision, free."""
+"""Legacy deterministic intent matching (regex). Prefer TOOL_ROUTER_MODE=llm."""
 
 from __future__ import annotations
 

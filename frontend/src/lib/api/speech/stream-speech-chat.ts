@@ -4,7 +4,7 @@ export type SpeechStreamHandlers = {
   onTranscript: (text: string) => void;
   onConversationId?: (id: string) => void;
   onToken: (delta: string) => void;
-  onAudio: (chunk: { index: number; mime: string; data: string }) => void;
+  onAudio: (chunk: { index: number; mime: string; data: string; phrase?: string }) => void;
   onDone?: (fullText: string) => void;
   onError?: (message: string) => void;
 };
@@ -17,10 +17,10 @@ export type SpeechStreamResult = {
 };
 
 type SpeechSsePayload =
-  | { type: "transcript"; text: string }
+  | { type: "transcript"; text: string; final?: boolean }
   | { type: "conversation_id"; id: string }
   | { type: "text"; delta: string }
-  | { type: "audio"; index: number; mime: string; data: string }
+  | { type: "audio"; index: number; phrase?: string; mime: string; data: string }
   | { type: "done"; text: string }
   | { type: "error"; message: string };
 
@@ -32,6 +32,7 @@ export async function streamSpeechChat(
   audioBlob: Blob,
   handlers: SpeechStreamHandlers,
   conversationId?: string,
+  clientTranscript?: string,
 ): Promise<SpeechStreamResult> {
   const base = getPublicApiBaseUrl();
   if (!base) {
@@ -47,6 +48,10 @@ export async function streamSpeechChat(
   form.append("audio", audioBlob, "recording.webm");
   if (conversationId) {
     form.append("conversation_id", conversationId);
+  }
+  const trimmedClient = clientTranscript?.trim();
+  if (trimmedClient) {
+    form.append("client_transcript", trimmedClient);
   }
 
   let response: Response;
@@ -138,6 +143,7 @@ export async function streamSpeechChat(
             } else if (obj.type === "audio") {
               handlers.onAudio({
                 index: obj.index,
+                phrase: obj.phrase,
                 mime: obj.mime,
                 data: obj.data,
               });

@@ -16,6 +16,30 @@ TOOL_NAME = "weather"
 SOURCE = "open_meteo_forecast"
 
 
+def _city_candidates(city: str) -> list[str]:
+    """
+    Build geocode candidates in priority order (deduped).
+    'Ghansoli, Navi Mumbai' → try full, then Ghansoli, then Navi Mumbai.
+    """
+    cleaned = " ".join(city.split()).strip(" ,")
+    if not cleaned:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            out.append(value)
+
+    add(cleaned)
+    if "," in cleaned:
+        for part in cleaned.split(","):
+            add(part.strip())
+    return out
+
+
 async def run(args: dict[str, Any]) -> ToolResult:
     city = str(args.get("city") or "").strip()
     if not city:
@@ -25,16 +49,28 @@ async def run(args: dict[str, Any]) -> ToolResult:
             error="Missing required argument: city",
         )
 
-    try:
-        location = await geocode.resolve_city(city)
-    except ValueError as exc:
-        return failure_result(tool_name=TOOL_NAME, source=SOURCE, error=str(exc))
-    except httpx.HTTPError as exc:
-        return failure_result(
-            tool_name=TOOL_NAME,
-            source=SOURCE,
-            error=f"Geocoding service unavailable: {exc}",
-        )
+    candidates = _city_candidates(city)
+    location: dict[str, Any] | None = None
+    last_error = f"No location found for {city!r}"
+    resolved_query = city
+
+    for candidate in candidates:
+        try:
+            location = await geocode.resolve_city(candidate)
+            resolved_query = candidate
+            break
+        except ValueError as exc:
+            last_error = str(exc)
+            continue
+        except httpx.HTTPError as exc:
+            return failure_result(
+                tool_name=TOOL_NAME,
+                source=SOURCE,
+                error=f"Geocoding service unavailable: {exc}",
+            )
+
+    if location is None:
+        return failure_result(tool_name=TOOL_NAME, source=SOURCE, error=last_error)
 
     lat = location["latitude"]
     lon = location["longitude"]
@@ -75,7 +111,8 @@ async def run(args: dict[str, Any]) -> ToolResult:
         tool_name=TOOL_NAME,
         source=SOURCE,
         data={
-            "city_query": city,
+            "city_query": resolved_query,
+            "user_city_query": city,
             "location": location["label"],
             "latitude": lat,
             "longitude": lon,

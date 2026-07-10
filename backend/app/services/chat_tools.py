@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from app.core.config import settings
 from app.core.prompts import get_chat_system_prompt, get_voice_mode_prompt
 from app.core.tool_context import ToolRunContext
 from app.core.tool_schemas import Intent, RouteDecision, ToolResult
 from app.core.tokens import trim_messages_to_estimated_token_budget
+from app.rag.retrieve import (
+    collect_target_attachment_ids,
+    format_document_context,
+    retrieve_for_chat,
+)
 from app.repositories.conversation_state_repository import conversation_state_repository
-from app.services.context_builder import inject_memory_context, inject_tool_context
+from app.services.context_builder import (
+    inject_document_context,
+    inject_memory_context,
+    inject_tool_context,
+)
 from app.services.intent_router import route_user_message
 from app.services.memory_service import load_conversation_summary, load_user_facts
 from app.services.pending_tool_router import forced_route_from_follow_up
@@ -28,9 +37,11 @@ async def build_chat_model_messages(
     user_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
     voice_mode: bool = False,
+    attachment_ids: Optional[Sequence[str]] = None,
 ) -> List[dict]:
     """
-    Persona prompt → memory blocks → trimmed history → preprocess → route → tools.
+    Persona prompt → memory blocks → optional DOCUMENT_CONTEXT → trimmed history
+    → preprocess → route → tools.
     """
     system_content = get_chat_system_prompt()
     if voice_mode:
@@ -48,7 +59,34 @@ async def build_chat_model_messages(
         combined,
         user_facts=facts,
         conversation_summary=summary,
+        user_message=user_message,
     )
+
+    # RAG: only when user attached and/or @mentioned files
+    if settings.RAG_ENABLED and user_id and (attachment_ids or user_message):
+        try:
+            targets = collect_target_attachment_ids(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                user_message=user_message,
+                explicit_ids=attachment_ids,
+            )
+            if targets:
+                hits = retrieve_for_chat(
+                    user_id=user_id,
+                    query=user_message,
+                    attachment_ids=targets,
+                )
+                body = format_document_context(hits)
+                if body:
+                    combined = inject_document_context(combined, context_body=body)
+                    logger.info(
+                        "rag_context_injected attachments=%s hits=%s",
+                        len(targets),
+                        len(hits),
+                    )
+        except Exception as exc:
+            logger.warning("rag_retrieve_skipped: %s", exc)
 
     trimmed = trim_messages_to_estimated_token_budget(
         combined,
@@ -88,7 +126,7 @@ async def build_chat_model_messages(
         pending_meta,
     )
     if decision is None:
-        decision = route_user_message(
+        decision = await route_user_message(
             user_message,
             trimmed,
             routing_text=preprocessed.routing_text,
@@ -137,7 +175,7 @@ async def build_chat_model_messages(
         or user_message
     )
 
-    logger.info(
+    logger.warning(
         "tool_executed tool=%s success=%s city=%r",
         tool_result.tool_name,
         tool_result.success,
@@ -162,7 +200,7 @@ async def resolve_tool_pipeline(
     pre = preprocess_query(user_message, history or [], pending_tool=pending_tool)
     decision = forced_route_from_follow_up(user_message, pre, pending_tool)
     if decision is None:
-        decision = route_user_message(
+        decision = await route_user_message(
             user_message,
             history,
             routing_text=pre.routing_text,

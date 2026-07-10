@@ -7,4 +7,5 @@ export type ChatApiMessage = {
 export type ChatCompletionRequestBody = {
   messages: ChatApiMessage[];
   conversation_id?: string | null;
+  attachment_ids?: string[] | null;
 };

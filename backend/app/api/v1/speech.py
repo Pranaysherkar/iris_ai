@@ -39,6 +39,7 @@ async def speech_chat_endpoint(
     user_id: Annotated[str, Depends(get_current_user_id_chat_ratelimited)],
     audio: UploadFile = File(...),
     conversation_id: Optional[str] = Form(default=None),
+    client_transcript: Optional[str] = Form(default=None),
 ):
     """
     One voice turn: upload full utterance audio → SSE stream with:
@@ -74,10 +75,13 @@ async def speech_chat_endpoint(
             content_type=content_type,
             user_id=user_id,
             conversation_id=conversation_id,
+            client_transcript=client_transcript,
         ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
             "X-Request-ID": rid,
         },
     )

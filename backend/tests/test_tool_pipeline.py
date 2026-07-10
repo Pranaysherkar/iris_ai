@@ -2,7 +2,9 @@
 
 import asyncio
 import unittest
+from unittest.mock import patch
 
+from app.core.config import settings
 from app.core.intent_rules import match_intent
 from app.core.tool_schemas import Intent
 from app.services.tool_executor import execute_route
@@ -32,9 +34,10 @@ class ToolPipelineTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertIn("iso", result.data)
 
-    def test_execute_datetime_route(self):
+    def test_execute_datetime_route_regex_mode(self):
         async def _run():
-            decision = route_user_message("What time is it?")
+            with patch.object(settings, "TOOL_ROUTER_MODE", "regex"):
+                decision = await route_user_message("What time is it?")
             result = await execute_route(decision)
             self.assertIsNotNone(result)
             self.assertTrue(result.success)

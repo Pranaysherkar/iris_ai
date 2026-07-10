@@ -12,7 +12,12 @@ def sentence_complete(buffer: str, *, min_chars: int = 15) -> bool:
     return any(stripped.endswith(end) for end in _SENTENCE_ENDINGS)
 
 
-def flush_sentence(buffer: str, *, min_chars: int = 15) -> tuple[str | None, str]:
+def flush_sentence(
+    buffer: str,
+    *,
+    min_chars: int = 15,
+    max_chars: int | None = None,
+) -> tuple[str | None, str]:
     """Return (completed_sentence_or_none, remaining_buffer)."""
     stripped = buffer.strip()
     if not stripped:
@@ -23,6 +28,15 @@ def flush_sentence(buffer: str, *, min_chars: int = 15) -> tuple[str | None, str
 
     if len(stripped) >= min_chars and stripped[-1] in ",;:":
         return stripped.rstrip(",;:") + ".", ""
+
+    if max_chars and len(stripped) >= max_chars:
+        window = stripped[:max_chars]
+        split_at = max(window.rfind(", "), window.rfind(" "), window.rfind(","))
+        if split_at >= min_chars:
+            head = stripped[:split_at].rstrip(",;:")
+            tail = stripped[split_at:].lstrip()
+            if head:
+                return head + ".", tail
 
     return None, buffer
 

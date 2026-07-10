@@ -5,14 +5,17 @@ import { useEffect, useRef, useState } from "react";
 import { irisLogoSrc, useUiTheme } from "@/lib/use-ui-theme";
 import type { Chat } from "./ChatLayout";
 import MessageBubble from "./MessageBubble";
-import ChatInput from "./ChatInput";
+import ChatInput, { type PendingAttachment } from "./ChatInput";
 
 type Props = {
   chat: Chat;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  onSendMessage: (content: string) => Promise<void>;
+  onSendMessage: (content: string, attachmentIds?: string[]) => Promise<void>;
   onVoiceToggle?: () => Promise<void>;
+  onUploadFiles?: (files: File[]) => Promise<void>;
+  onRemoveAttachment?: (id: string) => void;
+  pendingAttachments?: PendingAttachment[];
   voiceRecording?: boolean;
   voiceBusy?: boolean;
   userFirstName?: string;
@@ -86,6 +89,9 @@ export default function ChatArea({
   onToggleSidebar,
   onSendMessage,
   onVoiceToggle,
+  onUploadFiles,
+  onRemoveAttachment,
+  pendingAttachments = [],
   voiceRecording = false,
   voiceBusy = false,
   userFirstName,
@@ -212,8 +218,11 @@ export default function ChatArea({
 
       {/* Input */}
       <ChatInput
-        onSend={onSendMessage}
+        onSend={(content, attachmentIds) => onSendMessage(content, attachmentIds)}
         onVoiceToggle={onVoiceToggle}
+        onUploadFiles={onUploadFiles}
+        onRemoveAttachment={onRemoveAttachment}
+        pendingAttachments={pendingAttachments}
         voiceRecording={voiceRecording}
         voiceBusy={voiceBusy}
         disabled={voiceBusy}

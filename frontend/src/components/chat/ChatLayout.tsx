@@ -9,8 +9,15 @@ import {
   type ConversationListItemDto,
 } from "@/lib/api/conversations";
 import { streamChatCompletion } from "@/lib/api/chat";
+import {
+  deleteAttachment,
+  getAttachment,
+  uploadAttachment,
+} from "@/lib/api/attachments";
+import type { PendingAttachment } from "./ChatInput";
 import { streamSpeechChat } from "@/lib/api/speech";
 import { AudioPlaybackQueue } from "@/lib/voice/audio-playback-queue";
+import { LiveSpeechRecognizer } from "@/lib/voice/live-speech-recognition";
 import { VoiceRecorder } from "@/lib/voice/voice-recorder";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 
@@ -33,6 +40,14 @@ function displayChatFailureMessage(raw: string): string {
   return CHAT_GENERIC_USER_ERROR;
 }
 
+export type MessageAttachment = {
+  id: string;
+  fileName: string;
+  mimeType?: string | null;
+  /** Short label e.g. PDF, PNG, DOCX */
+  kindLabel: string;
+};
+
 export type Message = {
   id: string;
   role: "user" | "assistant";
@@ -40,6 +55,8 @@ export type Message = {
   timestamp: Date;
   /** How the user message was captured (shown in bubble). */
   inputMode?: "text" | "voice";
+  /** Files shown as ChatGPT-style cards on the user turn. */
+  attachments?: MessageAttachment[];
 };
 
 /** Local UI id + optional Supabase conversation UUID returned by the API (`X-Conversation-Id`). */
@@ -81,6 +98,28 @@ function titleFromFirstUserMessage(text: string): string {
 
 function makeId() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function attachmentKindLabel(fileName?: string | null, mimeType?: string | null): string {
+  const name = (fileName || "").toLowerCase();
+  const mime = (mimeType || "").toLowerCase();
+  if (name.endsWith(".pdf") || mime === "application/pdf") return "PDF";
+  if (name.endsWith(".png") || mime === "image/png") return "PNG";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg") || mime === "image/jpeg") return "JPEG";
+  if (name.endsWith(".webp") || mime === "image/webp") return "WEBP";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml")) return "DOCX";
+  if (name.endsWith(".txt") || mime === "text/plain") return "TXT";
+  if (mime.startsWith("image/")) return "Image";
+  return "File";
+}
+
+function isPlaceholderVoiceContent(content: string): boolean {
+  const t = content.trim();
+  return t === "" || t === "Listening…" || t === "Transcribing…";
+}
+
+function assistantHasPartialReply(content: string): boolean {
+  return content !== "__thinking__" && content.trim().length > 0;
 }
 
 function createDraftChat(): Chat {
@@ -151,11 +190,17 @@ export default function ChatLayout({ user }: Props) {
   /** Supabase conversation UUID per local chat id (synced before fetch — avoids race on 2nd message). */
   const backendIdByChatRef = useRef<Map<string, string>>(new Map());
   const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
+  const liveSpeechRef = useRef<LiveSpeechRecognizer | null>(null);
+  const voiceLiveUserMsgIdRef = useRef<string | null>(null);
+  const voiceLiveChatIdRef = useRef<string | null>(null);
   const audioQueueRef = useRef<AudioPlaybackQueue | null>(null);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const attachPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   if (!voiceRecorderRef.current) voiceRecorderRef.current = new VoiceRecorder();
+  if (!liveSpeechRef.current) liveSpeechRef.current = new LiveSpeechRecognizer();
   if (!audioQueueRef.current) audioQueueRef.current = new AudioPlaybackQueue();
   useLayoutEffect(() => {
     chatsRef.current = chats;
@@ -295,6 +340,7 @@ export default function ChatLayout({ user }: Props) {
     });
     setActiveChatId(newDraft.id);
     setActionError(null);
+    setPendingAttachments([]);
     // Close sidebar on mobile after selecting
     if (window.innerWidth < 768) setSidebarOpen(false);
   }, []);
@@ -305,7 +351,7 @@ export default function ChatLayout({ user }: Props) {
     if (window.innerWidth < 768) setSidebarOpen(false);
   }, []);
 
-  const handleSendMessage = useCallback(async (content: string) => {
+  const handleSendMessage = useCallback(async (content: string, attachmentIds: string[] = []) => {
     const trimmed = content.trim();
     if (!trimmed) return;
 
@@ -318,11 +364,22 @@ export default function ChatLayout({ user }: Props) {
 
     setActionError(null);
 
+    const idSet = new Set(attachmentIds);
+    const messageAttachments: MessageAttachment[] = pendingAttachments
+      .filter((a) => idSet.has(a.id) && a.ingestion_status === "ready" && !a.localError)
+      .map((a) => ({
+        id: a.id,
+        fileName: a.file_name || "file",
+        mimeType: a.mime_type,
+        kindLabel: attachmentKindLabel(a.file_name, a.mime_type),
+      }));
+
     const userMsg: Message = {
       id: makeId(),
       role: "user",
       content: trimmed,
       timestamp: new Date(),
+      attachments: messageAttachments.length ? messageAttachments : undefined,
     };
 
     const thinkingId = makeId();
@@ -332,6 +389,12 @@ export default function ChatLayout({ user }: Props) {
       content: "__thinking__",
       timestamp: new Date(),
     };
+
+    // Move ready files from input chips into the message (ChatGPT-style)
+    if (messageAttachments.length) {
+      const sentIds = new Set(messageAttachments.map((a) => a.id));
+      setPendingAttachments((prev) => prev.filter((a) => !sentIds.has(a.id)));
+    }
 
     setChats((prev) =>
       prev.map((c) => {
@@ -360,14 +423,17 @@ export default function ChatLayout({ user }: Props) {
       ) {
         console.warn("[chat]", message);
       }
+      setActionError(display);
       setChats((prev) =>
         prev.map((c) => {
           if (c.id !== requestChatId) return c;
           return {
             ...c,
-            messages: c.messages.map((m) =>
-              m.id === thinkingId ? { ...m, content: display, timestamp: new Date() } : m,
-            ),
+            messages: c.messages.map((m) => {
+              if (m.id !== thinkingId) return m;
+              if (assistantHasPartialReply(m.content)) return m;
+              return { ...m, content: display, timestamp: new Date() };
+            }),
           };
         }),
       );
@@ -388,6 +454,7 @@ export default function ChatLayout({ user }: Props) {
       {
         messages: [{ role: "user", content: trimmed }],
         conversation_id: backendConversationId ?? undefined,
+        attachment_ids: attachmentIds.length ? attachmentIds : undefined,
       },
       {
         onToken: (delta) => {
@@ -464,7 +531,189 @@ export default function ChatLayout({ user }: Props) {
         return c;
       }),
     );
+  }, [activeChatId, pendingAttachments]);
+
+  const handleUploadFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+
+    // Show chips immediately so the user always gets feedback
+    const entries = files.map((file) => ({
+      tempId: `local-${crypto.randomUUID()}`,
+      file,
+    }));
+    setActionError(null);
+    setPendingAttachments((prev) => [
+      ...prev,
+      ...entries.map(({ tempId, file }) => ({
+        id: tempId,
+        file_name: file.name,
+        mime_type: file.type || null,
+        file_size_bytes: file.size,
+        ingestion_status: "pending",
+        uploading: true,
+      })),
+    ]);
+
+    const supabase = createSupabaseBrowserClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      const msg = "You are not signed in. Please sign in again.";
+      setActionError(msg);
+      setPendingAttachments((prev) =>
+        prev.map((a) =>
+          entries.some((e) => e.tempId === a.id)
+            ? { ...a, uploading: false, localError: msg, ingestion_status: "failed" }
+            : a,
+        ),
+      );
+      return;
+    }
+
+    const list = chatsRef.current;
+    const requestChatId =
+      activeChatId && list.some((c) => c.id === activeChatId)
+        ? activeChatId
+        : (list.find(showChatInSidebar) ?? list[0])?.id ?? "";
+    const backendConversationId =
+      (requestChatId && backendIdByChatRef.current.get(requestChatId)) ||
+      list.find((c) => c.id === requestChatId)?.backendConversationId ||
+      undefined;
+
+    for (const { tempId, file } of entries) {
+      const { data, error } = await uploadAttachment(
+        session.access_token,
+        file,
+        backendConversationId,
+      );
+      if (error || !data) {
+        const msg = error || "Upload failed";
+        setPendingAttachments((prev) =>
+          prev.map((a) =>
+            a.id === tempId
+              ? { ...a, uploading: false, localError: msg, ingestion_status: "failed" }
+              : a,
+          ),
+        );
+        setActionError(msg);
+        continue;
+      }
+      setPendingAttachments((prev) =>
+        prev.map((a) => (a.id === tempId ? { ...data, uploading: false } : a)),
+      );
+    }
   }, [activeChatId]);
+
+  const handleRemoveAttachment = useCallback(async (id: string) => {
+    setPendingAttachments((prev) => prev.filter((a) => a.id !== id));
+    if (id.startsWith("local-")) return;
+    const supabase = createSupabaseBrowserClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    await deleteAttachment(session.access_token, id);
+  }, []);
+
+  // Poll ingestion status for pending/processing attachments
+  useEffect(() => {
+    const pollIds = pendingAttachments
+      .filter(
+        (a) =>
+          !a.localError &&
+          !a.uploading &&
+          !a.id.startsWith("local-") &&
+          (a.ingestion_status === "pending" || a.ingestion_status === "processing"),
+      )
+      .map((a) => a.id)
+      .sort()
+      .join(",");
+
+    if (!pollIds) {
+      if (attachPollRef.current) {
+        clearInterval(attachPollRef.current);
+        attachPollRef.current = null;
+      }
+      return;
+    }
+
+    const tick = async () => {
+      const supabase = createSupabaseBrowserClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const ids = pollIds.split(",");
+      for (const id of ids) {
+        const { data } = await getAttachment(session.access_token, id);
+        if (data) {
+          setPendingAttachments((prev) =>
+            prev.map((x) => (x.id === id ? { ...x, ...data } : x)),
+          );
+        }
+      }
+    };
+
+    void tick();
+    attachPollRef.current = setInterval(() => void tick(), 2000);
+    return () => {
+      if (attachPollRef.current) {
+        clearInterval(attachPollRef.current);
+        attachPollRef.current = null;
+      }
+    };
+    // Only re-subscribe when the set of in-flight IDs changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    pendingAttachments
+      .filter(
+        (a) =>
+          !a.localError &&
+          !a.uploading &&
+          !a.id.startsWith("local-") &&
+          (a.ingestion_status === "pending" || a.ingestion_status === "processing"),
+      )
+      .map((a) => a.id)
+      .sort()
+      .join(","),
+  ]);
+
+  const updateLiveVoiceUserMessage = useCallback((chatId: string, msgId: string, text: string) => {
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        const isFirstUserMsg = c.messages.filter((m) => m.role === "user").length <= 1;
+        return {
+          ...c,
+          historyLoaded: true,
+          title: isFirstUserMsg && text.trim() ? titleFromFirstUserMessage(text) : c.title,
+          messages: c.messages.map((m) =>
+            m.id === msgId
+              ? {
+                  ...m,
+                  content: text.trim() || "Listening…",
+                  inputMode: "voice",
+                  timestamp: new Date(),
+                }
+              : m,
+          ),
+        };
+      }),
+    );
+  }, []);
+
+  const removeLiveVoiceUserMessage = useCallback((chatId: string, msgId: string) => {
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        return {
+          ...c,
+          messages: c.messages.filter((m) => m.id !== msgId),
+        };
+      }),
+    );
+  }, []);
 
   const finishVoiceTurn = useCallback(async () => {
     await audioQueueRef.current?.whenIdle();
@@ -475,14 +724,57 @@ export default function ChatLayout({ user }: Props) {
     if (voiceBusy) return;
 
     const recorder = voiceRecorderRef.current!;
+    const liveSpeech = liveSpeechRef.current!;
     const audioQueue = audioQueueRef.current!;
+
+    const list = chatsRef.current;
+    const requestChatId =
+      activeChatId && list.some((c) => c.id === activeChatId)
+        ? activeChatId
+        : (list.find(showChatInSidebar) ?? list[0])?.id ?? "";
 
     if (!voiceRecording) {
       setActionError(null);
+      if (!requestChatId) return;
+
+      const userMsgId = makeId();
+      voiceLiveUserMsgIdRef.current = userMsgId;
+      voiceLiveChatIdRef.current = requestChatId;
+
+      setChats((prev) =>
+        prev.map((c) => {
+          if (c.id !== requestChatId) return c;
+          return {
+            ...c,
+            historyLoaded: true,
+            messages: [
+              ...c.messages,
+              {
+                id: userMsgId,
+                role: "user" as const,
+                content: "Listening…",
+                timestamp: new Date(),
+                inputMode: "voice" as const,
+              },
+            ],
+          };
+        }),
+      );
+
       try {
         await recorder.start();
+        if (LiveSpeechRecognizer.supported()) {
+          liveSpeech.start({
+            onInterim: (text) => updateLiveVoiceUserMessage(requestChatId, userMsgId, text),
+            onFinal: (text) => updateLiveVoiceUserMessage(requestChatId, userMsgId, text),
+          });
+        }
         setVoiceRecording(true);
       } catch {
+        liveSpeech.cancel();
+        removeLiveVoiceUserMessage(requestChatId, userMsgId);
+        voiceLiveUserMsgIdRef.current = null;
+        voiceLiveChatIdRef.current = null;
         setActionError("Microphone access was denied. Allow mic permission and try again.");
       }
       return;
@@ -491,12 +783,14 @@ export default function ChatLayout({ user }: Props) {
     setVoiceRecording(false);
     setVoiceBusy(true);
 
-    const list = chatsRef.current;
-    const requestChatId =
-      activeChatId && list.some((c) => c.id === activeChatId)
-        ? activeChatId
-        : (list.find(showChatInSidebar) ?? list[0])?.id ?? "";
-    if (!requestChatId) {
+    const userMsgId = voiceLiveUserMsgIdRef.current;
+    const liveChatId = voiceLiveChatIdRef.current ?? requestChatId;
+    voiceLiveUserMsgIdRef.current = null;
+    voiceLiveChatIdRef.current = null;
+
+    const clientTranscript = liveSpeech.stop();
+
+    if (!liveChatId || !userMsgId) {
       recorder.cancel();
       setVoiceBusy(false);
       return;
@@ -507,26 +801,24 @@ export default function ChatLayout({ user }: Props) {
       const recorded = await recorder.stop();
       audioBlob = recorded.blob;
     } catch {
+      removeLiveVoiceUserMessage(liveChatId, userMsgId);
       setActionError("Could not capture audio. Please try again.");
       setVoiceBusy(false);
       return;
     }
 
-    if (audioBlob.size < 800) {
+    if (audioBlob.size < 800 && !clientTranscript.trim()) {
+      removeLiveVoiceUserMessage(liveChatId, userMsgId);
       setActionError("Recording too short. Hold the mic a little longer.");
       setVoiceBusy(false);
       return;
     }
 
-    const userMsgId = makeId();
+    if (clientTranscript.trim()) {
+      updateLiveVoiceUserMessage(liveChatId, userMsgId, clientTranscript);
+    }
+
     const thinkingId = makeId();
-    const userMsg: Message = {
-      id: userMsgId,
-      role: "user",
-      content: "Transcribing…",
-      timestamp: new Date(),
-      inputMode: "voice",
-    };
     const thinkingMsg: Message = {
       id: thinkingId,
       role: "assistant",
@@ -536,13 +828,18 @@ export default function ChatLayout({ user }: Props) {
 
     setChats((prev) =>
       prev.map((c) => {
-        if (c.id !== requestChatId) return c;
-        const isFirstUserMsg = c.messages.filter((m) => m.role === "user").length === 0;
+        if (c.id !== liveChatId) return c;
+        const isFirstUserMsg = c.messages.filter((m) => m.role === "user").length <= 1;
+        const userMsg = c.messages.find((m) => m.id === userMsgId);
+        const userText = userMsg?.content ?? clientTranscript;
         return {
           ...c,
           historyLoaded: true,
-          title: isFirstUserMsg ? DEFAULT_CHAT_TITLE : c.title,
-          messages: [...c.messages, userMsg, thinkingMsg],
+          title:
+            isFirstUserMsg && userText && !isPlaceholderVoiceContent(userText)
+              ? titleFromFirstUserMessage(userText)
+              : c.title,
+          messages: [...c.messages, thinkingMsg],
         };
       }),
     );
@@ -562,17 +859,19 @@ export default function ChatLayout({ user }: Props) {
         console.warn("[voice chat]", message);
       }
       audioQueue.stop();
+      setActionError(display);
       setChats((prev) =>
         prev.map((c) => {
-          if (c.id !== requestChatId) return c;
+          if (c.id !== liveChatId) return c;
           return {
             ...c,
             messages: c.messages
               .map((m) => {
                 if (m.id === thinkingId) {
+                  if (assistantHasPartialReply(m.content)) return m;
                   return { ...m, content: display, timestamp: new Date() };
                 }
-                if (m.id === userMsgId && m.content === "Transcribing…") {
+                if (m.id === userMsgId && isPlaceholderVoiceContent(m.content)) {
                   return null;
                 }
                 return m;
@@ -590,61 +889,92 @@ export default function ChatLayout({ user }: Props) {
     }
 
     const backendConversationId =
-      backendIdByChatRef.current.get(requestChatId) ??
-      chatsRef.current.find((c) => c.id === requestChatId)?.backendConversationId ??
+      backendIdByChatRef.current.get(liveChatId) ??
+      chatsRef.current.find((c) => c.id === liveChatId)?.backendConversationId ??
       undefined;
 
     audioQueue.stop();
+
+    const appendVoiceSpokenPhrase = (phrase: string) => {
+      const trimmed = phrase.trim();
+      if (!trimmed) return;
+      setChats((prev) =>
+        prev.map((c) => {
+          if (c.id !== liveChatId) return c;
+          return {
+            ...c,
+            messages: c.messages.map((m) => {
+              if (m.id !== thinkingId) return m;
+              if (m.content === "__thinking__" || m.content === "") {
+                return { ...m, content: trimmed, timestamp: new Date() };
+              }
+              return {
+                ...m,
+                content: `${m.content} ${trimmed}`,
+                timestamp: new Date(),
+              };
+            }),
+          };
+        }),
+      );
+    };
+
+    const setVoiceAssistantFullReply = (fullText: string) => {
+      if (!fullText.trim()) return;
+      setChats((prev) =>
+        prev.map((c) => {
+          if (c.id !== liveChatId) return c;
+          return {
+            ...c,
+            messages: c.messages.map((m) =>
+              m.id === thinkingId
+                ? { ...m, content: fullText, timestamp: new Date() }
+                : m,
+            ),
+          };
+        }),
+      );
+    };
+
+    let pendingFullReply: string | null = null;
 
     const result = await streamSpeechChat(
       session.access_token,
       audioBlob,
       {
         onTranscript: (text) => {
-          setChats((prev) =>
-            prev.map((c) => {
-              if (c.id !== requestChatId) return c;
-              return {
-                ...c,
-                messages: c.messages.map((m) =>
-                  m.id === userMsgId ? { ...m, content: text, inputMode: "voice" } : m,
-                ),
-              };
-            }),
-          );
+          // Sarvam final STT replaces browser live preview in the user bubble.
+          updateLiveVoiceUserMessage(liveChatId, userMsgId, text);
         },
         onConversationId: (cid) => {
-          backendIdByChatRef.current.set(requestChatId, cid);
+          backendIdByChatRef.current.set(liveChatId, cid);
           setChats((prev) =>
             prev.map((c) =>
-              c.id === requestChatId
+              c.id === liveChatId
                 ? { ...c, backendConversationId: cid, historyLoaded: true }
                 : c,
             ),
           );
         },
-        onToken: (delta) => {
-          setChats((prev) =>
-            prev.map((c) => {
-              if (c.id !== requestChatId) return c;
-              return {
-                ...c,
-                messages: c.messages.map((m) => {
-                  if (m.id !== thinkingId) return m;
-                  if (m.content === "__thinking__") {
-                    return { ...m, content: delta, timestamp: new Date() };
-                  }
-                  return { ...m, content: m.content + delta, timestamp: new Date() };
-                }),
-              };
-            }),
-          );
+        onToken: () => {
+          /* LLM tokens buffered server-side; reveal synced with TTS onStart. */
         },
         onAudio: (chunk) => {
-          audioQueue.enqueueBase64(chunk.data, chunk.mime);
+          audioQueue.enqueueBase64(chunk.data, chunk.mime, () => {
+            if (chunk.phrase) appendVoiceSpokenPhrase(chunk.phrase);
+          });
+        },
+        onDone: (fullText) => {
+          pendingFullReply = fullText;
+        },
+        onError: (message) => {
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[voice chat stream]", message);
+          }
         },
       },
       backendConversationId ?? undefined,
+      clientTranscript.trim() || undefined,
     );
 
     if (result.error) {
@@ -653,11 +983,15 @@ export default function ChatLayout({ user }: Props) {
       return;
     }
 
+    if (result.fullReply) {
+      pendingFullReply = result.fullReply;
+    }
+
     if (result.conversationId) {
-      backendIdByChatRef.current.set(requestChatId, result.conversationId);
+      backendIdByChatRef.current.set(liveChatId, result.conversationId);
       setChats((prev) =>
         prev.map((c) =>
-          c.id === requestChatId
+          c.id === liveChatId
             ? {
                 ...c,
                 backendConversationId: result.conversationId ?? c.backendConversationId,
@@ -675,7 +1009,7 @@ export default function ChatLayout({ user }: Props) {
 
     setChats((prev) =>
       prev.map((c) => {
-        if (c.id !== requestChatId) return c;
+        if (c.id !== liveChatId) return c;
         const thinking = c.messages.find((m) => m.id === thinkingId);
         if (thinking?.content === "__thinking__") {
           return {
@@ -692,7 +1026,18 @@ export default function ChatLayout({ user }: Props) {
     );
 
     await finishVoiceTurn();
-  }, [activeChatId, voiceBusy, voiceRecording, finishVoiceTurn]);
+
+    if (pendingFullReply) {
+      setVoiceAssistantFullReply(pendingFullReply);
+    }
+  }, [
+    activeChatId,
+    voiceBusy,
+    voiceRecording,
+    finishVoiceTurn,
+    updateLiveVoiceUserMessage,
+    removeLiveVoiceUserMessage,
+  ]);
 
   const handleDeleteChat = useCallback(async (chatId: string) => {
     const target = chatsRef.current.find((c) => c.id === chatId);
@@ -764,6 +1109,9 @@ export default function ChatLayout({ user }: Props) {
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             onSendMessage={handleSendMessage}
             onVoiceToggle={handleVoiceToggle}
+            onUploadFiles={handleUploadFiles}
+            onRemoveAttachment={handleRemoveAttachment}
+            pendingAttachments={pendingAttachments}
             voiceRecording={voiceRecording}
             voiceBusy={voiceBusy}
             historyLoading={historyLoading}

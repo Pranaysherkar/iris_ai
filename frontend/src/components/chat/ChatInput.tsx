@@ -1,10 +1,20 @@
 "use client";
 
-import { useState, useRef, KeyboardEvent } from "react";
+import { useState, useRef, KeyboardEvent, useEffect } from "react";
+import type { AttachmentDto } from "@/lib/api/attachments";
+import { isAllowedAttachmentFile } from "@/lib/api/attachments";
+
+export type PendingAttachment = AttachmentDto & {
+  localError?: string;
+  uploading?: boolean;
+};
 
 type Props = {
-  onSend: (content: string) => Promise<void>;
+  onSend: (content: string, attachmentIds: string[]) => Promise<void>;
   onVoiceToggle?: () => Promise<void>;
+  onUploadFiles?: (files: File[]) => Promise<void>;
+  onRemoveAttachment?: (id: string) => void;
+  pendingAttachments?: PendingAttachment[];
   voiceRecording?: boolean;
   voiceBusy?: boolean;
   disabled?: boolean;
@@ -13,13 +23,18 @@ type Props = {
 export default function ChatInput({
   onSend,
   onVoiceToggle,
+  onUploadFiles,
+  onRemoveAttachment,
+  pendingAttachments = [],
   voiceRecording = false,
   voiceBusy = false,
   disabled = false,
 }: Props) {
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const adjustHeight = () => {
     const el = textareaRef.current;
@@ -28,21 +43,46 @@ export default function ChatInput({
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
 
+  useEffect(() => {
+    adjustHeight();
+  }, [value]);
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
     adjustHeight();
   };
 
+  const readyIds = pendingAttachments
+    .filter((a) => a.ingestion_status === "ready" && !a.localError)
+    .map((a) => a.id);
+
+  // Block send while any attachment is still uploading/ingesting
+  const attachmentsProcessing = pendingAttachments.some(
+    (a) =>
+      !a.localError &&
+      (a.uploading ||
+        a.ingestion_status === "pending" ||
+        a.ingestion_status === "processing"),
+  );
+
   const handleSend = async () => {
     const trimmed = value.trim();
-    if (!trimmed || sending || disabled || voiceRecording) return;
+    if (
+      !trimmed ||
+      sending ||
+      disabled ||
+      voiceRecording ||
+      attachmentsProcessing
+    ) {
+      return;
+    }
     setValue("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
     setSending(true);
     try {
-      await onSend(trimmed);
+      await onSend(trimmed, readyIds);
     } finally {
       setSending(false);
       textareaRef.current?.focus();
@@ -52,6 +92,7 @@ export default function ChatInput({
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (attachmentsProcessing) return;
       handleSend();
     }
   };
@@ -61,14 +102,122 @@ export default function ChatInput({
     await onVoiceToggle();
   };
 
+  const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const fileList = input.files;
+    if (!fileList?.length || !onUploadFiles) {
+      input.value = "";
+      return;
+    }
+
+    // Copy File objects BEFORE resetting the input — FileList is live and
+    // clearing value empties it, which previously made every pick a no-op.
+    const all = Array.from(fileList);
+    input.value = "";
+
+    const allowed = all.filter(isAllowedAttachmentFile);
+    const rejected = all.filter((f) => !isAllowedAttachmentFile(f));
+
+    if (rejected.length > 0) {
+      const names = rejected.map((f) => f.name).join(", ");
+      setAttachError(
+        `Unsupported file${rejected.length > 1 ? "s" : ""}: ${names}. Use PDF, PNG, JPG, WEBP, DOCX, or TXT.`,
+      );
+    } else {
+      setAttachError(null);
+    }
+
+    if (!allowed.length) return;
+
+    try {
+      await onUploadFiles(allowed);
+    } catch (err) {
+      setAttachError(err instanceof Error ? err.message : "Upload failed");
+    }
+  };
+
   const inputLocked = sending || disabled || voiceBusy;
-  const canSend = value.trim().length > 0 && !inputLocked && !voiceRecording;
+  const canSend =
+    value.trim().length > 0 &&
+    !inputLocked &&
+    !voiceRecording &&
+    !attachmentsProcessing;
   const micActive = voiceRecording;
   const showMic = Boolean(onVoiceToggle);
+  const showAttach = Boolean(onUploadFiles);
 
   return (
     <div className="chat-input-outer">
+      {attachError ? (
+        <p className="attach-error" role="alert">
+          {attachError}
+          <button
+            type="button"
+            className="attach-error-dismiss"
+            aria-label="Dismiss"
+            onClick={() => setAttachError(null)}
+          >
+            ×
+          </button>
+        </p>
+      ) : null}
+
+      {pendingAttachments.length > 0 ? (
+        <div className="attach-chips" aria-label="Attached files">
+          {pendingAttachments.map((a) => (
+            <div
+              key={a.id}
+              className={`attach-chip status-${a.ingestion_status}${a.localError ? " status-failed" : ""}`}
+              title={a.localError || a.file_name || a.id}
+            >
+              <span className="attach-chip-name">{a.file_name || "file"}</span>
+              <span className="attach-chip-status">
+                {a.uploading
+                  ? "uploading"
+                  : a.localError
+                    ? "error"
+                    : a.ingestion_status}
+              </span>
+              {onRemoveAttachment ? (
+                <button
+                  type="button"
+                  className="attach-chip-x"
+                  aria-label={`Remove ${a.file_name || "file"}`}
+                  onClick={() => onRemoveAttachment(a.id)}
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div className={`chat-input-wrap ${inputLocked ? "sending" : ""}`}>
+        {showAttach ? (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="attach-file-input"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.txt,application/pdf,image/png,image/jpeg,image/webp,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              multiple
+              onChange={handleFilePick}
+              disabled={inputLocked || voiceRecording}
+            />
+            <button
+              type="button"
+              className="attach-btn"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={inputLocked || voiceRecording}
+              aria-label="Attach file"
+              title="Attach PDF, image, DOCX, or TXT"
+            >
+              <PaperclipIcon />
+            </button>
+          </>
+        ) : null}
+
         {showMic ? (
           <button
             type="button"
@@ -98,7 +247,15 @@ export default function ChatInput({
           ref={textareaRef}
           className="chat-textarea"
           placeholder={
-            micActive ? "Listening… tap mic when done" : voiceBusy ? "Iris is responding…" : "Message Iris…"
+            micActive
+              ? "Listening… tap mic when done"
+              : voiceBusy
+                ? "Iris is responding…"
+                : attachmentsProcessing
+                  ? "Wait until your file is ready…"
+                  : pendingAttachments.length
+                    ? "Ask about your file… use @filename to mention"
+                    : "Message Iris…"
           }
           value={value}
           rows={1}
@@ -112,7 +269,16 @@ export default function ChatInput({
           className={`send-btn ${canSend ? "send-btn-active" : ""}`}
           onClick={handleSend}
           disabled={!canSend}
-          aria-label="Send message"
+          aria-label={
+            attachmentsProcessing
+              ? "Wait for file processing to finish"
+              : "Send message"
+          }
+          title={
+            attachmentsProcessing
+              ? "File is still processing — send unlocks when ready"
+              : undefined
+          }
         >
           {sending ? <SpinnerIcon /> : <SendIcon />}
         </button>
@@ -120,15 +286,26 @@ export default function ChatInput({
       <p className="input-hint">
         {micActive ? (
           <>Tap <kbd>mic</kbd> again to send your voice message</>
+        ) : attachmentsProcessing ? (
+          <>Wait for the file to finish processing before sending</>
         ) : (
           <>
             Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line
+            {showAttach ? <> · paperclip to attach</> : null}
             {showMic ? <> · <kbd>mic</kbd> for voice</> : null}
           </>
         )}
       </p>
       <style>{inputStyles}</style>
     </div>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
   );
 }
 
@@ -161,6 +338,98 @@ const inputStyles = `
     margin: 0 auto;
     width: 100%;
   }
+
+  .attach-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 8px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+  }
+  .attach-error-dismiss {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    opacity: 0.8;
+  }
+  .attach-error-dismiss:hover { opacity: 1; }
+
+  .attach-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .attach-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 6px 8px 6px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #c8c8d8;
+  }
+  .attach-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+  }
+  .attach-chip-status {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+  }
+  .attach-chip.status-ready { border-color: rgba(52, 211, 153, 0.35); }
+  .attach-chip.status-processing, .attach-chip.status-pending {
+    border-color: rgba(251, 191, 36, 0.35);
+  }
+  .attach-chip.status-failed { border-color: rgba(248, 113, 113, 0.45); color: #fca5a5; }
+  .attach-chip-x {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    opacity: 0.7;
+  }
+  .attach-chip-x:hover { opacity: 1; }
+
+  .attach-file-input { display: none; }
+  .attach-btn {
+    width: 38px; height: 38px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #8a8aa8;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+  }
+  .attach-btn:hover:not(:disabled) {
+    background: rgba(124,106,255,0.12);
+    color: #c4b5fd;
+    border-color: rgba(124,106,255,0.35);
+  }
+  .attach-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .chat-input-wrap {
     display: flex;
@@ -291,7 +560,7 @@ const inputStyles = `
     .chat-input-outer { padding: 8px 12px 12px; }
     .input-hint { display: none; }
     .chat-input-wrap { padding: 10px 10px 10px 14px; border-radius: 14px; }
-    .send-btn, .mic-btn { width: 36px; height: 36px; border-radius: 10px; }
+    .send-btn, .mic-btn, .attach-btn { width: 36px; height: 36px; border-radius: 10px; }
   }
 
   [data-theme="light"] .chat-input-wrap {
@@ -306,7 +575,7 @@ const inputStyles = `
   }
   [data-theme="light"] .chat-textarea { color: #111118; }
   [data-theme="light"] .chat-textarea::placeholder { color: #9090a8; }
-  [data-theme="light"] .mic-btn {
+  [data-theme="light"] .mic-btn, [data-theme="light"] .attach-btn {
     background: rgba(0,0,0,0.03);
     border-color: rgba(0,0,0,0.08);
     color: #66667a;
@@ -320,6 +589,16 @@ const inputStyles = `
     background: linear-gradient(135deg, #7c6aff, #9d8cff);
     color: #fff;
     border-color: transparent;
+  }
+  [data-theme="light"] .attach-chip {
+    background: rgba(0,0,0,0.04);
+    border-color: rgba(0,0,0,0.08);
+    color: #333348;
+  }
+  [data-theme="light"] .attach-error {
+    color: #b91c1c;
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.25);
   }
   [data-theme="light"] .input-hint { color: #c0c0d0; }
   [data-theme="light"] .input-hint kbd {

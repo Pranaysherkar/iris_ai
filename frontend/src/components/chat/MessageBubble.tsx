@@ -89,20 +89,50 @@ function MicBadgeIcon() {
   );
 }
 
+function FileDocIcon({ kind }: { kind: string }) {
+  const isPdf = kind === "PDF";
+  return (
+    <span className={`msg-file-icon ${isPdf ? "msg-file-icon-pdf" : "msg-file-icon-generic"}`} aria-hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+    </span>
+  );
+}
+
 export default function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
   const isThinking = message.content === "__thinking__";
+  const attachments = message.attachments ?? [];
 
   if (isUser) {
     return (
       <div className="msg-row msg-row-user">
-        <div className="msg-bubble msg-bubble-user">
-          {message.inputMode === "voice" ? (
-            <span className="msg-voice-badge" title="Voice message">
-              <MicBadgeIcon />
-            </span>
+        <div className="msg-user-stack">
+          {attachments.length > 0 ? (
+            <div className="msg-file-list" aria-label="Attached files">
+              {attachments.map((file) => (
+                <div key={file.id} className="msg-file-card">
+                  <FileDocIcon kind={file.kindLabel} />
+                  <div className="msg-file-meta">
+                    <span className="msg-file-name" title={file.fileName}>
+                      {file.fileName}
+                    </span>
+                    <span className="msg-file-kind">{file.kindLabel}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : null}
-          <p className="msg-text">{message.content}</p>
+          <div className="msg-bubble msg-bubble-user">
+            {message.inputMode === "voice" ? (
+              <span className="msg-voice-badge" title="Voice message">
+                <MicBadgeIcon />
+              </span>
+            ) : null}
+            <p className="msg-text">{message.content}</p>
+          </div>
         </div>
         <style>{bubbleStyles}</style>
       </div>
@@ -243,6 +273,67 @@ const bubbleStyles = `
     flex-direction: row-reverse;
     justify-content: flex-start;
   }
+  .msg-user-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: min(85%, 520px);
+    min-width: 0;
+  }
+  .msg-file-list {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    width: 100%;
+  }
+  .msg-file-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: min(100%, 280px);
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  }
+  .msg-file-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #fff;
+  }
+  .msg-file-icon-pdf {
+    background: linear-gradient(145deg, #ef4444, #b91c1c);
+  }
+  .msg-file-icon-generic {
+    background: linear-gradient(145deg, #6366f1, #4338ca);
+  }
+  .msg-file-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .msg-file-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #f3f3f8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .msg-file-kind {
+    font-size: 11.5px;
+    color: #9a9ab0;
+    letter-spacing: 0.02em;
+  }
   .msg-row-assistant {
     flex-direction: row;
   }
@@ -278,7 +369,7 @@ const bubbleStyles = `
     background: linear-gradient(135deg, #7c6aff 0%, #9d8cff 100%);
     border-bottom-right-radius: 5px;
     box-shadow: 0 4px 20px rgba(124,106,255,0.25);
-    max-width: min(72%, 520px);
+    max-width: 100%;
     flex-shrink: 0;
     display: flex;
     align-items: flex-start;
@@ -488,13 +579,15 @@ const bubbleStyles = `
   /* Responsive */
   @media (max-width: 768px) {
     .msg-row { padding: 6px 14px; gap: 8px; }
-    .msg-bubble-user { max-width: min(85%, 520px); }
+    .msg-user-stack { max-width: min(85%, 520px); }
+    .msg-bubble-user { max-width: 100%; }
     .msg-bubble { padding: 10px 14px; }
   }
   @media (max-width: 480px) {
     .msg-row { padding: 5px 10px; gap: 6px; }
     .msg-avatar-ring { width: 26px; height: 26px; }
-    .msg-bubble-user { max-width: 90%; }
+    .msg-user-stack { max-width: 90%; }
+    .msg-bubble-user { max-width: 100%; }
     .md-code-dot { display: none; }
   }
 
@@ -544,4 +637,11 @@ const bubbleStyles = `
     border-color: rgba(124,106,255,0.2);
     color: #6a5acd;
   }
+  [data-theme="light"] .msg-file-card {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  }
+  [data-theme="light"] .msg-file-name { color: #111118; }
+  [data-theme="light"] .msg-file-kind { color: #6b6b80; }
 `;

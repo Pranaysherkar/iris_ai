@@ -31,10 +31,15 @@ from app.services.speech.tts_service import tts_service
 logger = logging.getLogger(__name__)
 
 _MIN_CHARS = lambda: settings.VOICE_TTS_MIN_SENTENCE_CHARS
+_MAX_PHRASE = lambda: settings.VOICE_TTS_MAX_PHRASE_CHARS
 
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _next_llm_chunk(aiter):
+    return await aiter.__anext__()
 
 
 async def _synthesize_and_encode(sentence: str, index: int) -> str:
@@ -42,10 +47,60 @@ async def _synthesize_and_encode(sentence: str, index: int) -> str:
     event = {
         "type": "audio",
         "index": index,
+        "phrase": sentence,
         "mime": mime,
         "data": base64.b64encode(audio_bytes).decode("ascii"),
     }
     return _sse(event)
+
+
+def _queue_tts(
+    text: str,
+    *,
+    tts_tasks: List[asyncio.Task[str]],
+    audio_index_ref: List[int],
+) -> None:
+    phrase = text.strip()
+    if not phrase:
+        return
+    idx = audio_index_ref[0]
+    tts_tasks.append(asyncio.create_task(_synthesize_and_encode(phrase, idx)))
+    audio_index_ref[0] = idx + 1
+
+
+def _feed_prose_to_tts(
+    prose_delta: str,
+    *,
+    sentence_buffer: str,
+    tts_tasks: List[asyncio.Task[str]],
+    audio_index_ref: List[int],
+    min_chars: int,
+    max_phrase: int,
+) -> str:
+    if not prose_delta:
+        return sentence_buffer
+    sentence_buffer += prose_delta
+    completed, sentence_buffer = flush_sentence(
+        sentence_buffer,
+        min_chars=min_chars,
+        max_chars=max_phrase,
+    )
+    if completed:
+        _queue_tts(completed, tts_tasks=tts_tasks, audio_index_ref=audio_index_ref)
+    return sentence_buffer
+
+
+async def _yield_ready_tts(
+    tts_tasks: List[asyncio.Task[str]],
+    next_tts_out: int,
+) -> AsyncGenerator[tuple[str, int], None]:
+    while next_tts_out < len(tts_tasks) and tts_tasks[next_tts_out].done():
+        try:
+            yield await tts_tasks[next_tts_out], next_tts_out + 1
+        except Exception as exc:
+            logger.warning("voice_tts_sentence_failed: %s", exc)
+            yield "", next_tts_out + 1
+        next_tts_out += 1
 
 
 async def stream_voice_chat_turn(
@@ -55,33 +110,46 @@ async def stream_voice_chat_turn(
     content_type: str,
     user_id: str,
     conversation_id: Optional[str],
+    client_transcript: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     if not settings.SPEECH_ENABLED:
         yield _sse({"type": "error", "message": "Speech chat is disabled."})
         yield "data: [DONE]\n\n"
         return
 
+    hinted = normalize_text(client_transcript or "")
+    resolved_conversation_id = chat_repository.resolve_conversation_id(user_id, conversation_id)
+    yield _sse({"type": "conversation_id", "id": resolved_conversation_id})
+
+    transcript = ""
     try:
-        transcript = await stt_service.transcribe(
-            audio_bytes,
-            filename=filename,
-            content_type=content_type,
+        transcript = normalize_text(
+            await stt_service.transcribe(
+                audio_bytes,
+                filename=filename,
+                content_type=content_type,
+            )
         )
     except Exception as exc:
-        logger.exception("voice_stt_failed user=%s", user_id)
-        yield _sse({"type": "error", "message": f"Speech recognition failed: {exc}"})
-        yield "data: [DONE]\n\n"
-        return
+        logger.warning("voice_sarvam_stt_failed user=%s error=%s", user_id, exc)
+        if hinted:
+            transcript = hinted
+            logger.info("voice_stt_fallback client_transcript chars=%s user=%s", len(transcript), user_id)
+        else:
+            logger.exception("voice_stt_failed user=%s", user_id)
+            yield _sse({"type": "error", "message": f"Speech recognition failed: {exc}"})
+            yield "data: [DONE]\n\n"
+            return
 
-    transcript = normalize_text(transcript)
+    if not transcript and hinted:
+        transcript = hinted
+
     if not transcript:
         yield _sse({"type": "error", "message": "Could not understand speech. Please try again."})
         yield "data: [DONE]\n\n"
         return
 
-    resolved_conversation_id = chat_repository.resolve_conversation_id(user_id, conversation_id)
-    yield _sse({"type": "conversation_id", "id": resolved_conversation_id})
-    yield _sse({"type": "transcript", "text": transcript})
+    yield _sse({"type": "transcript", "text": transcript, "final": True})
 
     if not settings.SPEECH_SKIP_MODERATION:
         try:
@@ -128,27 +196,57 @@ async def stream_voice_chat_turn(
     assistant_parts: List[str] = []
     sentence_buffer = ""
     prose_filter = TtsProseFilter()
-    audio_index = 0
+    audio_index_ref = [0]
     min_chars = _MIN_CHARS()
+    max_phrase = _MAX_PHRASE()
     tts_tasks: List[asyncio.Task[str]] = []
     next_tts_out = 0
 
-    async def _yield_ready_tts() -> AsyncGenerator[str, None]:
-        nonlocal next_tts_out
-        while next_tts_out < len(tts_tasks) and tts_tasks[next_tts_out].done():
-            try:
-                yield await tts_tasks[next_tts_out]
-            except Exception as exc:
-                logger.warning("voice_tts_sentence_failed: %s", exc)
-            next_tts_out += 1
-
-    async for event_chunk in ai_service.chat_stream(
+    llm_stream = ai_service.chat_stream(
         formatted_messages,
         usage_holder=usage_holder,
         max_tokens=settings.VOICE_MAX_TOKENS,
         model=settings.GROQ_VOICE_MODEL,
         temperature=0.4,
-    ):
+    )
+    llm_iter = llm_stream.__aiter__()
+    llm_task: asyncio.Task | None = asyncio.create_task(_next_llm_chunk(llm_iter))
+
+    while llm_task is not None or next_tts_out < len(tts_tasks):
+        async for audio_event, next_out in _yield_ready_tts(tts_tasks, next_tts_out):
+            next_tts_out = next_out
+            if audio_event:
+                yield audio_event
+
+        if llm_task is None:
+            pending = [
+                t
+                for i, t in enumerate(tts_tasks)
+                if i >= next_tts_out and not t.done()
+            ]
+            if pending:
+                await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                continue
+            break
+
+        if not llm_task.done():
+            waitables: List[asyncio.Task] = [llm_task]
+            waitables.extend(
+                t
+                for i, t in enumerate(tts_tasks)
+                if i >= next_tts_out and not t.done()
+            )
+            await asyncio.wait(waitables, return_when=asyncio.FIRST_COMPLETED)
+            continue
+
+        try:
+            event_chunk = llm_task.result()
+        except StopAsyncIteration:
+            llm_task = None
+            continue
+
+        llm_task = asyncio.create_task(_next_llm_chunk(llm_iter))
+
         if not event_chunk.startswith("data: "):
             continue
 
@@ -173,33 +271,39 @@ async def stream_voice_chat_turn(
         assistant_parts.append(delta)
         yield _sse({"type": "text", "delta": delta})
 
-        prose_delta = prose_filter.feed(delta)
-        if prose_delta:
-            sentence_buffer += prose_delta
-            completed, sentence_buffer = flush_sentence(sentence_buffer, min_chars=min_chars)
-            if completed:
-                tts_tasks.append(asyncio.create_task(_synthesize_and_encode(completed, audio_index)))
-                audio_index += 1
-
-        async for audio_event in _yield_ready_tts():
-            yield audio_event
+        sentence_buffer = _feed_prose_to_tts(
+            prose_filter.feed(delta),
+            sentence_buffer=sentence_buffer,
+            tts_tasks=tts_tasks,
+            audio_index_ref=audio_index_ref,
+            min_chars=min_chars,
+            max_phrase=max_phrase,
+        )
 
     trailing_prose = prose_filter.flush()
     if trailing_prose:
         sentence_buffer += trailing_prose
 
-    remainder = flush_remainder(sentence_buffer, min_chars=max(6, min_chars - 2))
+    remainder = flush_remainder(sentence_buffer, min_chars=max(4, min_chars - 2))
     if remainder:
-        tts_tasks.append(
-            asyncio.create_task(_synthesize_and_encode(remainder, audio_index))
+        _queue_tts(
+            remainder,
+            tts_tasks=tts_tasks,
+            audio_index_ref=audio_index_ref,
         )
 
     while next_tts_out < len(tts_tasks):
-        try:
-            yield await tts_tasks[next_tts_out]
-        except Exception as exc:
-            logger.warning("voice_tts_sentence_failed: %s", exc)
-        next_tts_out += 1
+        async for audio_event, next_out in _yield_ready_tts(tts_tasks, next_tts_out):
+            next_tts_out = next_out
+            if audio_event:
+                yield audio_event
+        pending = [
+            t for i, t in enumerate(tts_tasks) if i >= next_tts_out and not t.done()
+        ]
+        if pending:
+            await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        elif next_tts_out >= len(tts_tasks):
+            break
 
     full_reply = "".join(assistant_parts)
     if full_reply.strip():

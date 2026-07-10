@@ -20,4 +20,7 @@ dependencies = [
     "qdrant-client>=1.17.1",
     "supabase>=2.29.0",
     "uvicorn>=0.46.0",
+    "llama-cloud>=1.0",
+    "google-genai>=1.0",
+    "python-docx>=1.1",
 ]

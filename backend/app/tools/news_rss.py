@@ -93,11 +93,16 @@ async def run(args: dict[str, Any]) -> ToolResult:
             continue
 
     if not headlines:
-        msg = "No RSS headlines found."
         if topic:
-            msg += f" Try a broader query than '{topic}'."
+            msg = (
+                f"No headlines matched the local/city filter '{topic}'. "
+                "Current feeds are general world news, not city-specific. "
+                "Offer world headlines or another topic."
+            )
+        else:
+            msg = "No headlines available from the configured news feeds right now."
         if errors:
-            msg += f" Feed errors: {'; '.join(errors[:2])}"
+            msg += f" (feed issues: {'; '.join(errors[:2])})"
         return failure_result(tool_name=TOOL_NAME, source=SOURCE, error=msg)
 
     return success_result(

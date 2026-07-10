@@ -48,6 +48,11 @@ class Settings(BaseSettings):
 
     # --- Tool calls (live data pipeline) ---
     TOOLS_ENABLED: bool = True
+    """Router backend: llm (Groq native tool calling) or regex (legacy rules)."""
+    TOOL_ROUTER_MODE: str = "llm"
+    """Fast/reliable model for tool selection (must support Groq tool_calls well)."""
+    TOOL_ROUTER_MODEL: str = "llama-3.3-70b-versatile"
+    TOOL_ROUTER_TIMEOUT_SECONDS: float = 20.0
     """Minimum confidence (0–1) from rules/router before invoking a tool."""
     TOOL_INTENT_CONFIDENCE_THRESHOLD: float = 0.85
     OLLAMA_API_KEY: Optional[str] = None
@@ -95,6 +100,22 @@ class Settings(BaseSettings):
     # Qdrant Settings
     QDRANT_URL: str
     QDRANT_API_KEY: str
+    QDRANT_COLLECTION: str = "iris_document_chunks"
+
+    # --- RAG / document ingest ---
+    RAG_ENABLED: bool = True
+    SUPABASE_STORAGE_BUCKET: str = "attachments"
+    LLAMA_CLOUD_API_KEY: Optional[str] = None
+    """LlamaParse tier: fast | cost_effective | agentic | agentic_plus"""
+    LLAMAPARSE_TIER: str = "agentic"
+    EMBEDDING_MODEL: str = "gemini-embedding-001"
+    EMBEDDING_DIMENSIONS: int = 1536
+    RAG_CHUNK_SIZE_CHARS: int = 1800
+    """~10–15% overlap of chunk size."""
+    RAG_CHUNK_OVERLAP_CHARS: int = 220
+    RAG_TOP_K: int = 6
+    RAG_MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
+    GEMINI_VISION_MODEL: str = "gemini-2.5-flash"
     
     # AI Provider Settings
     GEMINI_API_KEY: Optional[str] = None
@@ -112,9 +133,14 @@ class Settings(BaseSettings):
     SPEECH_LANGUAGE: str = "en-IN"
     SPEECH_HTTP_TIMEOUT_SECONDS: float = 60.0
     SPEECH_SKIP_MODERATION: bool = True
-    VOICE_MAX_TOKENS: int = 80
-    VOICE_TTS_MIN_SENTENCE_CHARS: int = 10
-    VOICE_TOOLS_ENABLED: bool = False
+    """Browser live text is preview only; Sarvam STT is always used when possible."""
+    SPEECH_CLIENT_TRANSCRIPT_ENABLED: bool = False
+    """Max LLM tokens for voice replies (must be high enough to finish full answers)."""
+    VOICE_MAX_TOKENS: int = 512
+    VOICE_TTS_MIN_SENTENCE_CHARS: int = 6
+    """Force early TTS phrase split when buffer grows this long without punctuation."""
+    VOICE_TTS_MAX_PHRASE_CHARS: int = 48
+    VOICE_TOOLS_ENABLED: bool = True
     GROQ_VOICE_MODEL: str = "llama-3.1-8b-instant"
     GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
 
