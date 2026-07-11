@@ -36,7 +36,9 @@ export default async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const isProtectedRoute = request.nextUrl.pathname.startsWith('/chat')
-  const isAuthRoute = request.nextUrl.pathname.startsWith('/auth')
+  const isAuthCallback = request.nextUrl.pathname.startsWith('/auth/callback')
+  const isAuthRoute =
+    request.nextUrl.pathname.startsWith('/auth') && !isAuthCallback
 
   if (!user && isProtectedRoute) {
     // no user, potentially respond by redirecting the user to the login page

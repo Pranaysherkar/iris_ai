@@ -13,7 +13,16 @@ declare
   v_dob text;
   v_dob_date date;
 begin
-  v_name := nullif(trim(coalesce(new.raw_user_meta_data->>'full_name', '')), '');
+  v_name := nullif(
+    trim(
+      coalesce(
+        new.raw_user_meta_data->>'full_name',
+        new.raw_user_meta_data->>'name',
+        ''
+      )
+    ),
+    ''
+  );
   v_dob := nullif(trim(coalesce(new.raw_user_meta_data->>'dob', '')), '');
 
   if v_dob is not null then
