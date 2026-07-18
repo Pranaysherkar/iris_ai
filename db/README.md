@@ -25,3 +25,12 @@ Run files in this exact order in Supabase SQL Editor:
 - Soft delete is handled through `deleted_at` and `deleted_by`.
 - Message order under concurrency uses `seq_no` assigned by a trigger.
 - RLS ensures users can access only their own rows.
+
+## Chat edit branches (existing projects)
+
+If `conversations` / `messages` already exist, re-run only:
+
+1. `03_tables_conversations.sql` (adds `active_leaf_message_id`)
+2. `04_tables_messages.sql` (adds branch columns + backfill + FK)
+
+The `ALTER … IF NOT EXISTS` blocks at the bottom of each file are safe to re-run in the Supabase SQL Editor.

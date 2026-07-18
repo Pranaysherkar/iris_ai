@@ -39,6 +39,31 @@ def _human_fetch_time(iso_ts: str) -> str:
         return text
 
 
+def _compact_tool_data(result: ToolResult) -> dict:
+    """Shrink tool payloads for the LLM (especially web_search snippets)."""
+    data = result.data if isinstance(result.data, dict) else {}
+    if result.tool_name != "web_search":
+        return data
+
+    rows = data.get("results") or []
+    compact_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        compact_rows.append(
+            {
+                "title": str(row.get("title") or "").strip(),
+                "url": str(row.get("url") or "").strip(),
+                "snippet": str(row.get("content") or row.get("snippet") or "").strip(),
+            }
+        )
+    return {
+        "query": data.get("query"),
+        "result_count": len(compact_rows),
+        "results": compact_rows,
+    }
+
+
 def build_tool_context_message(
     result: ToolResult,
     *,
@@ -50,7 +75,7 @@ def build_tool_context_message(
         "fetched_at": result.fetched_at,
         "fetched_at_display": _human_fetch_time(result.fetched_at),
         "success": result.success,
-        "data": result.data,
+        "data": _compact_tool_data(result),
         "error": result.error,
     }
     if user_requested_place:
@@ -63,11 +88,20 @@ def build_tool_context_message(
                 f" The user asked about {user_requested_place.strip()!r}. "
                 "Report weather for data.location / data.city_query that matches that place. "
             )
+        web_search_hint = ""
+        if result.tool_name == "web_search":
+            web_search_hint = (
+                " For web_search: list options/providers/facts ONLY from data.results. "
+                "Do not invent vendors, products, prices, or stats not supported by those snippets. "
+                "Prefer variety across the listed sources. "
+                "Cite title and URL for key claims (short markdown links are fine)."
+            )
         instruction = (
             "Use ONLY the JSON below for live factual claims. "
             "Do NOT say you lack real-time access, internet, or cannot fetch live data — "
             "this TOOL_RESULT is live data. Answer the user's question directly from data. "
             f"{place_hint}"
+            f"{web_search_hint}"
             "Do not invent missing fields. "
             "Do NOT paste raw ISO timestamps (e.g. 2026-07-10T16:06:56+00:00). "
             "For news headlines, omit fetch time unless the user asks when data was updated; "

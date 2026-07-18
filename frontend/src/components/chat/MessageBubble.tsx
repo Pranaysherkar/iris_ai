@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,6 +10,9 @@ import type { Message } from "./ChatLayout";
 
 type Props = {
   message: Message;
+  onEditMessage?: (messageId: string, content: string) => Promise<void>;
+  onSelectBranch?: (targetMessageId: string) => Promise<void>;
+  actionsDisabled?: boolean;
 };
 
 /** Map fence labels to Prism languages (subset). */
@@ -89,6 +92,15 @@ function MicBadgeIcon() {
   );
 }
 
+function PencilIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+    </svg>
+  );
+}
+
 function FileDocIcon({ kind }: { kind: string }) {
   const isPdf = kind === "PDF";
   return (
@@ -101,15 +113,82 @@ function FileDocIcon({ kind }: { kind: string }) {
   );
 }
 
-export default function MessageBubble({ message }: Props) {
+export default function MessageBubble({
+  message,
+  onEditMessage,
+  onSelectBranch,
+  actionsDisabled = false,
+}: Props) {
   const isUser = message.role === "user";
   const isThinking = message.content === "__thinking__";
   const attachments = message.attachments ?? [];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.content);
+  const [busy, setBusy] = useState(false);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const branchTotal = message.branchTotal ?? 1;
+  const branchVersion = message.branchVersion ?? 1;
+  const siblings = message.branchSiblings ?? [];
+  const showBranchPager = branchTotal > 1 && siblings.length > 1;
+  const hasServerId =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      message.id,
+    );
+  const canEdit =
+    Boolean(onEditMessage) && !actionsDisabled && !isThinking && hasServerId;
+
+  useLayoutEffect(() => {
+    if (!editing) return;
+    const el = editTextareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const next = Math.min(Math.max(el.scrollHeight, 88), 280);
+    el.style.height = `${next}px`;
+  }, [draft, editing]);
+
+  const switchBranch = async (delta: -1 | 1) => {
+    if (!onSelectBranch || busy || actionsDisabled) return;
+    const ordered = [...siblings].sort((a, b) => a.branchVersion - b.branchVersion);
+    const idx = ordered.findIndex((s) => s.id === message.id);
+    const next = ordered[idx + delta];
+    if (!next) return;
+    setBusy(true);
+    try {
+      await onSelectBranch(next.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setDraft(message.content);
+  };
+
+  const submitEdit = async () => {
+    if (!onEditMessage || busy) return;
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    // Close editor immediately so the chat can show the new branch + thinking reply.
+    // Same text is allowed — ChatGPT-style regenerate / new sibling version.
+    setBusy(true);
+    setEditing(false);
+    try {
+      await onEditMessage(message.id, trimmed);
+    } catch {
+      // Parent surfaces errors; reopen editor with the draft if the call throws.
+      setDraft(trimmed);
+      setEditing(true);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (isUser) {
     return (
       <div className="msg-row msg-row-user">
-        <div className="msg-user-stack">
+        <div className={`msg-user-stack${editing ? " msg-user-stack-editing" : ""}`}>
           {attachments.length > 0 ? (
             <div className="msg-file-list" aria-label="Attached files">
               {attachments.map((file) => (
@@ -125,14 +204,103 @@ export default function MessageBubble({ message }: Props) {
               ))}
             </div>
           ) : null}
-          <div className="msg-bubble msg-bubble-user">
-            {message.inputMode === "voice" ? (
-              <span className="msg-voice-badge" title="Voice message">
-                <MicBadgeIcon />
-              </span>
-            ) : null}
-            <p className="msg-text">{message.content}</p>
-          </div>
+          {editing ? (
+            <div className="msg-edit-panel">
+              <textarea
+                ref={editTextareaRef}
+                className="msg-edit-textarea"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                disabled={busy}
+                autoFocus
+                spellCheck
+                aria-label="Edit message"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelEdit();
+                    return;
+                  }
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void submitEdit();
+                  }
+                }}
+              />
+              <div className="msg-edit-actions">
+                <button
+                  type="button"
+                  className="msg-edit-btn msg-edit-cancel"
+                  disabled={busy}
+                  onClick={cancelEdit}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="msg-edit-btn msg-edit-save"
+                  disabled={busy || !draft.trim()}
+                  onClick={() => void submitEdit()}
+                >
+                  {busy ? "Sending…" : "Send"}
+                </button>
+              </div>
+              <p className="msg-edit-hint">Enter to send · Shift+Enter for new line · Esc to cancel</p>
+            </div>
+          ) : (
+            <div className="msg-bubble msg-bubble-user">
+              {message.inputMode === "voice" ? (
+                <span className="msg-voice-badge" title="Voice message">
+                  <MicBadgeIcon />
+                </span>
+              ) : null}
+              <p className="msg-text">{message.content}</p>
+            </div>
+          )}
+          {!editing ? (
+            <div className="msg-user-actions">
+              {canEdit ? (
+                <button
+                  type="button"
+                  className="msg-action-btn"
+                  title="Edit message"
+                  disabled={busy || actionsDisabled}
+                  onClick={() => {
+                    setDraft(message.content);
+                    setEditing(true);
+                  }}
+                >
+                  <PencilIcon />
+                  <span>Edit</span>
+                </button>
+              ) : null}
+              {showBranchPager ? (
+                <div className="msg-branch-pager" aria-label="Message versions">
+                  <button
+                    type="button"
+                    className="msg-branch-nav"
+                    aria-label="Previous version"
+                    disabled={busy || actionsDisabled || branchVersion <= 1}
+                    onClick={() => void switchBranch(-1)}
+                  >
+                    ‹
+                  </button>
+                  <span className="msg-branch-label">
+                    {branchVersion}/{branchTotal}
+                  </span>
+                  <button
+                    type="button"
+                    className="msg-branch-nav"
+                    aria-label="Next version"
+                    disabled={busy || actionsDisabled || branchVersion >= branchTotal}
+                    onClick={() => void switchBranch(1)}
+                  >
+                    ›
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <style>{bubbleStyles}</style>
       </div>
@@ -280,6 +448,157 @@ const bubbleStyles = `
     gap: 8px;
     max-width: min(85%, 520px);
     min-width: 0;
+    width: 100%;
+  }
+  .msg-user-stack-editing {
+    max-width: min(94%, 640px);
+    align-items: stretch;
+  }
+  .msg-user-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-height: 22px;
+  }
+  .msg-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: none;
+    background: transparent;
+    color: #8b8ba0;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 4px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .msg-action-btn:hover:not(:disabled) {
+    color: #d4d4e0;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .msg-action-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .msg-branch-pager {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #8b8ba0;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .msg-branch-nav {
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .msg-branch-nav:hover:not(:disabled) {
+    color: #e8e8f0;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .msg-branch-nav:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .msg-branch-label {
+    min-width: 2.4em;
+    text-align: center;
+  }
+  .msg-edit-panel {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 14px 12px;
+    border-radius: 18px;
+    background: rgba(28, 28, 36, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+    box-sizing: border-box;
+  }
+  .msg-edit-textarea {
+    width: 100%;
+    resize: none;
+    overflow-y: auto;
+    min-height: 88px;
+    max-height: 280px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    color: #f3f3f8;
+    padding: 14px 16px;
+    font: inherit;
+    font-size: 15px;
+    line-height: 1.55;
+    letter-spacing: 0.01em;
+    box-sizing: border-box;
+    outline: none;
+    caret-color: #b8aeff;
+  }
+  .msg-edit-textarea:focus {
+    border-color: rgba(124, 106, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.16);
+    background: rgba(255, 255, 255, 0.055);
+  }
+  .msg-edit-textarea:disabled {
+    opacity: 0.7;
+  }
+  .msg-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+  }
+  .msg-edit-btn {
+    border: none;
+    border-radius: 999px;
+    min-height: 36px;
+    padding: 0 16px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  }
+  .msg-edit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .msg-edit-cancel {
+    background: rgba(255, 255, 255, 0.06);
+    color: #d0d0dc;
+  }
+  .msg-edit-cancel:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+  .msg-edit-save {
+    background: linear-gradient(135deg, #7c6aff 0%, #8f7dff 100%);
+    color: #fff;
+    min-width: 84px;
+    box-shadow: 0 4px 14px rgba(124, 106, 255, 0.28);
+  }
+  .msg-edit-save:hover:not(:disabled) {
+    background: linear-gradient(135deg, #6b59f0 0%, #7c6aff 100%);
+  }
+  .msg-edit-hint {
+    margin: 0;
+    font-size: 11px;
+    color: #7a7a90;
+    text-align: right;
+    letter-spacing: 0.01em;
   }
   .msg-file-list {
     display: flex;
@@ -644,4 +963,39 @@ const bubbleStyles = `
   }
   [data-theme="light"] .msg-file-name { color: #111118; }
   [data-theme="light"] .msg-file-kind { color: #6b6b80; }
+  [data-theme="light"] .msg-action-btn { color: #6b6b80; }
+  [data-theme="light"] .msg-action-btn:hover:not(:disabled) {
+    color: #22222e;
+    background: rgba(0, 0, 0, 0.05);
+  }
+  [data-theme="light"] .msg-branch-pager { color: #6b6b80; }
+  [data-theme="light"] .msg-branch-nav:hover:not(:disabled) {
+    color: #22222e;
+    background: rgba(0, 0, 0, 0.05);
+  }
+  [data-theme="light"] .msg-edit-panel {
+    background: #f7f7fa;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+  }
+  [data-theme="light"] .msg-edit-textarea {
+    background: #fff;
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #111118;
+    caret-color: #6a5acd;
+  }
+  [data-theme="light"] .msg-edit-textarea:focus {
+    border-color: rgba(124, 106, 255, 0.55);
+    box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.14);
+    background: #fff;
+  }
+  [data-theme="light"] .msg-edit-cancel {
+    background: rgba(0, 0, 0, 0.05);
+    color: #44445a;
+  }
+  [data-theme="light"] .msg-edit-cancel:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.08);
+    color: #111118;
+  }
+  [data-theme="light"] .msg-edit-hint { color: #8a8a9a; }
 `;

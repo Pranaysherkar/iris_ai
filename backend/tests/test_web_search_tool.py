@@ -47,6 +47,34 @@ class WebSearchToolTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_web_search_clips_long_snippets(self):
+        long = "word " * 500
+        payload = {
+            "results": [
+                {
+                    "title": f"Result {i}",
+                    "url": f"https://example.com/{i}",
+                    "content": long,
+                }
+                for i in range(10)
+            ]
+        }
+
+        async def _run():
+            with patch(
+                "app.tools.web_search.post_json",
+                new_callable=AsyncMock,
+                return_value=payload,
+            ):
+                result = await web_search.run({"query": "telephony", "max_results": 10})
+                self.assertTrue(result.success)
+                self.assertGreaterEqual(result.data["result_count"], 1)
+                self.assertLessEqual(result.data["result_count"], 10)
+                for row in result.data["results"]:
+                    self.assertLessEqual(len(row["content"]), 420)
+
+        asyncio.run(_run())
+
     def test_web_search_missing_key(self):
         async def _run():
             with patch(

@@ -181,10 +181,16 @@ async def build_chat_model_messages(
         tool_result.success,
         decision.tool_args.get("city"),
     )
-    return inject_tool_context(
+    with_tools = inject_tool_context(
         trimmed,
         tool_result=tool_result,
         user_requested_place=str(requested_place) if requested_place else None,
+    )
+    # Re-trim after tool inject so web_search/etc. cannot blow past Groq TPM.
+    # Leading system messages (persona + TOOL_RESULT) are preserved.
+    return trim_messages_to_estimated_token_budget(
+        with_tools,
+        settings.CHAT_MAX_CONTEXT_TOKENS_ESTIMATE,
     )
 
 

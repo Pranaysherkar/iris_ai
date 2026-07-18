@@ -12,12 +12,22 @@ export type ConversationListResponse = {
   conversations: ConversationListItemDto[];
 };
 
+export type BranchSiblingDto = {
+  id: string;
+  branch_version: number;
+};
+
 export type HistoryMessageDto = {
   id: string;
   role: string;
   content: string;
   model_name?: string | null;
   created_at?: string | null;
+  parent_message_id?: string | null;
+  sibling_group_id?: string | null;
+  branch_version?: number;
+  branch_total?: number;
+  branch_siblings?: BranchSiblingDto[];
 };
 
 export type ConversationHistoryResponse = {
@@ -104,6 +114,26 @@ export async function fetchConversationHistory(
 > {
   const path = `/api/v1/chat/history/${encodeURIComponent(conversationId)}`;
   const result = await authJson<ConversationHistoryResponse>(accessToken, path);
+  if (!result.ok) return { ok: false, detail: result.detail, status: result.status };
+  return { ok: true, messages: result.data.messages };
+}
+
+export async function selectConversationBranch(
+  accessToken: string,
+  conversationId: string,
+  messageId: string
+): Promise<
+  { ok: true; messages: HistoryMessageDto[] } | { ok: false; detail: string; status: number }
+> {
+  const path = `/api/v1/chat/branch/select`;
+  const result = await authJson<ConversationHistoryResponse>(accessToken, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      message_id: messageId,
+    }),
+  });
   if (!result.ok) return { ok: false, detail: result.detail, status: result.status };
   return { ok: true, messages: result.data.messages };
 }

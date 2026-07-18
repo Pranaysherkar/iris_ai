@@ -12,6 +12,8 @@ type Props = {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onSendMessage: (content: string, attachmentIds?: string[]) => Promise<void>;
+  onEditMessage?: (messageId: string, content: string) => Promise<void>;
+  onSelectBranch?: (targetMessageId: string) => Promise<void>;
   onVoiceToggle?: () => Promise<void>;
   onUploadFiles?: (files: File[]) => Promise<void>;
   onRemoveAttachment?: (id: string) => void;
@@ -88,6 +90,8 @@ export default function ChatArea({
   sidebarOpen,
   onToggleSidebar,
   onSendMessage,
+  onEditMessage,
+  onSelectBranch,
   onVoiceToggle,
   onUploadFiles,
   onRemoveAttachment,
@@ -103,6 +107,7 @@ export default function ChatArea({
   const logoSrc = irisLogoSrc(uiTheme);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasUserMessages = chat.messages.some((m) => m.role === "user");
+  const replyInFlight = chat.messages.some((m) => m.content === "__thinking__");
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -209,7 +214,13 @@ export default function ChatArea({
         ) : (
           <div className="messages-list">
             {chat.messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onEditMessage={onEditMessage}
+                onSelectBranch={onSelectBranch}
+                actionsDisabled={voiceBusy || voiceRecording || replyInFlight}
+              />
             ))}
             <div ref={messagesEndRef} />
           </div>

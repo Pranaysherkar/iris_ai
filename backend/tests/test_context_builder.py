@@ -37,3 +37,30 @@ def test_failure_message_forbids_quoting_raw_errors() -> None:
     assert "never quote raw error" in content
     assert "quote the error if helpful" not in content
     assert "local/city feeds" in content
+
+
+def test_web_search_message_requires_citations_and_compact_snippets() -> None:
+    result = ToolResult(
+        success=True,
+        tool_name="web_search",
+        source="ollama_web_search",
+        fetched_at="2026-07-10T16:06:56+00:00",
+        data={
+            "query": "telephony",
+            "result_count": 1,
+            "results": [
+                {
+                    "title": "Twilio",
+                    "url": "https://www.twilio.com",
+                    "content": "Cloud communications platform for voice agents.",
+                }
+            ],
+        },
+    )
+    content = build_tool_context_message(result)["content"]
+    assert "Do not invent vendors" in content
+    assert "Cite title and URL" in content
+    assert '"snippet": "Cloud communications platform for voice agents."' in content
+    assert '"url": "https://www.twilio.com"' in content
+    # Compact web_search rows use "snippet", not raw "content".
+    assert '"content": "Cloud communications platform for voice agents."' not in content

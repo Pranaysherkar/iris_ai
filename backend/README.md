@@ -59,7 +59,7 @@ See `.env.example` for defaults and comments:
 - `TOOL_DATETIME_ENABLED` - Server date/time tool (no external API).
 - `TOOL_WEATHER_ENABLED` - Open-Meteo current weather (uses `OPEN_METEO_*` URLs; no API key).
 - `TOOL_WEB_SEARCH_ENABLED` / `TOOL_WEB_FETCH_ENABLED` - Ollama cloud web search/fetch (`OLLAMA_API_KEY`, `OLLAMA_WEB_SEARCH_BASE_URL`).
-- `TOOL_WEB_SEARCH_MAX_RESULTS` - Max hits per search (1–10, default 5).
+- `TOOL_WEB_SEARCH_MAX_RESULTS` - Max hits per search (1–10, default 10). Snippets are truncated (`TOOL_WEB_SEARCH_SNIPPET_CHARS`) and the tool block is budget-capped (`TOOL_WEB_SEARCH_MAX_CONTEXT_TOKENS`) for Groq TPM.
 - `TOOL_WIKIPEDIA_ENABLED` / `TOOL_NEWS_RSS_ENABLED` / `TOOL_EXCHANGE_RATES_ENABLED` / `TOOL_USER_MEMORY_ENABLED` - Free API tools (no extra keys).
 - `TOOL_NEWS_RSS_FEEDS` - Comma-separated RSS URLs for headline tool.
 - `WIKIPEDIA_API_URL` / `FRANKFURTER_API_URL` - Optional overrides for encyclopedia and FX tools.

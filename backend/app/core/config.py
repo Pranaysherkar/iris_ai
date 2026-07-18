@@ -64,7 +64,12 @@ class Settings(BaseSettings):
     TOOL_WEATHER_ENABLED: bool = True
     TOOL_WEB_SEARCH_ENABLED: bool = False
     TOOL_WEB_FETCH_ENABLED: bool = False
-    TOOL_WEB_SEARCH_MAX_RESULTS: int = 5
+    """How many search hits to fetch (1–10). Default 10 for source variety."""
+    TOOL_WEB_SEARCH_MAX_RESULTS: int = 10
+    """Max characters kept per result snippet (title/url untouched)."""
+    TOOL_WEB_SEARCH_SNIPPET_CHARS: int = 400
+    """Hard cap for the web_search TOOL_RESULT block (~tokens); drops lowest ranks first."""
+    TOOL_WEB_SEARCH_MAX_CONTEXT_TOKENS: int = 3500
     TOOL_WIKIPEDIA_ENABLED: bool = True
     TOOL_NEWS_RSS_ENABLED: bool = True
     TOOL_EXCHANGE_RATES_ENABLED: bool = True
@@ -79,6 +84,9 @@ class Settings(BaseSettings):
     # After the first user message + first assistant reply, call the LLM to set a short sidebar title.
     CHAT_AI_TITLE_ENABLED: bool = True
     CHAT_TITLE_MAX_WORDS: int = 4
+
+    # Max edit versions (siblings) per user turn — ChatGPT-style <n/m> branches.
+    CONVERSATION_BRANCH_LIMIT: int = 3
 
     @property
     def cors_origin_list(self) -> List[str]:

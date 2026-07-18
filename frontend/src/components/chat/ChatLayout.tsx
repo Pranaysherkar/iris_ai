@@ -5,10 +5,12 @@ import { useState, useCallback, useRef, useMemo, useLayoutEffect, useEffect } fr
 import {
   fetchConversationList,
   fetchConversationHistory,
+  selectConversationBranch,
   softDeleteConversation,
   type ConversationListItemDto,
+  type HistoryMessageDto,
 } from "@/lib/api/conversations";
-import { streamChatCompletion } from "@/lib/api/chat";
+import { streamChatCompletion, streamChatEdit } from "@/lib/api/chat";
 import {
   deleteAttachment,
   getAttachment,
@@ -28,16 +30,63 @@ import ChatArea from "./ChatArea";
 const CHAT_GENERIC_USER_ERROR =
   "We're having trouble processing your request right now. Please try again in a moment.";
 
+const SERVER_MESSAGE_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isServerMessageId(id: string): boolean {
+  return SERVER_MESSAGE_ID_RE.test(id.trim());
+}
+
+/** Strip leading `400: ` / `413: ` from API client error strings. */
+function extractApiDetail(raw: string): string {
+  const text = raw.trim();
+  const m = text.match(/^\d{3}:\s*([\s\S]*)$/);
+  return (m ? m[1] : text).trim();
+}
+
 function displayChatFailureMessage(raw: string): string {
-  const t = raw.trim().toLowerCase();
+  const detail = extractApiDetail(raw);
+  const t = detail.toLowerCase();
   if (
     t.includes("not signed in") ||
     t.includes("sign in again") ||
     t.includes("please sign in")
   ) {
-    return raw.trim();
+    return detail;
   }
   return CHAT_GENERIC_USER_ERROR;
+}
+
+/** Edit / branch failures — clear, distinct from normal chat errors. */
+function displayEditFailureMessage(raw: string): string {
+  const detail = extractApiDetail(raw);
+  const t = detail.toLowerCase();
+  if (
+    t.includes("not signed in") ||
+    t.includes("sign in again") ||
+    t.includes("please sign in")
+  ) {
+    return detail;
+  }
+  if (t.includes("maximum") && t.includes("versions allowed")) {
+    return "You've reached the limit of 3 versions for this message.";
+  }
+  if (t.includes("active branch")) {
+    return `Edit failed: ${detail}`;
+  }
+  if (t.includes("only user messages can be edited")) {
+    return `Edit failed: ${detail}`;
+  }
+  if (t.includes("invalid message_id") || t.includes("invalid message id")) {
+    return "Edit failed: This message is still saving. Wait a moment, then try Edit again.";
+  }
+  if (t.includes("message not found")) {
+    return "Edit failed: That message was not found. Refresh the chat and try again.";
+  }
+  if (t.includes("save a reply") || t.includes("before editing")) {
+    return detail.startsWith("Edit failed:") ? detail : `Edit failed: ${detail}`;
+  }
+  return "Edit failed: Couldn’t apply this edit. Please try again, or refresh the chat.";
 }
 
 export type MessageAttachment = {
@@ -46,6 +95,11 @@ export type MessageAttachment = {
   mimeType?: string | null;
   /** Short label e.g. PDF, PNG, DOCX */
   kindLabel: string;
+};
+
+export type BranchSibling = {
+  id: string;
+  branchVersion: number;
 };
 
 export type Message = {
@@ -57,7 +111,28 @@ export type Message = {
   inputMode?: "text" | "voice";
   /** Files shown as ChatGPT-style cards on the user turn. */
   attachments?: MessageAttachment[];
+  /** ChatGPT-style edit versions for this user turn. */
+  branchVersion?: number;
+  branchTotal?: number;
+  branchSiblings?: BranchSibling[];
 };
+
+function mapHistoryMessages(rows: HistoryMessageDto[]): Message[] {
+  return rows
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      timestamp: m.created_at ? new Date(m.created_at) : new Date(),
+      branchVersion: m.branch_version ?? 1,
+      branchTotal: m.branch_total ?? 1,
+      branchSiblings: (m.branch_siblings ?? []).map((s) => ({
+        id: s.id,
+        branchVersion: s.branch_version,
+      })),
+    }));
+}
 
 /** Local UI id + optional Supabase conversation UUID returned by the API (`X-Conversation-Id`). */
 export type Chat = {
@@ -186,6 +261,13 @@ export default function ChatLayout({ user }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [historyRetryTick, setHistoryRetryTick] = useState(0);
 
+  // Auto-dismiss banners (e.g. version-limit warning) after 5s.
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
+
   const chatsRef = useRef(chats);
   /** Supabase conversation UUID per local chat id (synced before fetch — avoids race on 2nd message). */
   const backendIdByChatRef = useRef<Map<string, string>>(new Map());
@@ -288,14 +370,7 @@ export default function ChatLayout({ user }: Props) {
         return;
       }
 
-      const mapped: Message[] = res.messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          timestamp: m.created_at ? new Date(m.created_at) : new Date(),
-        }));
+      const mapped = mapHistoryMessages(res.messages);
 
       setChats((prev) =>
         prev.map((c) => {
@@ -374,8 +449,9 @@ export default function ChatLayout({ user }: Props) {
         kindLabel: attachmentKindLabel(a.file_name, a.mime_type),
       }));
 
+    const localUserMsgId = makeId();
     const userMsg: Message = {
-      id: makeId(),
+      id: localUserMsgId,
       role: "user",
       content: trimmed,
       timestamp: new Date(),
@@ -482,6 +558,20 @@ export default function ChatLayout({ user }: Props) {
             ),
           );
         },
+        onUserMessageId: (serverMsgId) => {
+          if (!isServerMessageId(serverMsgId)) return;
+          setChats((prev) =>
+            prev.map((c) => {
+              if (c.id !== requestChatId) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === localUserMsgId ? { ...m, id: serverMsgId } : m,
+                ),
+              };
+            }),
+          );
+        },
       },
     );
 
@@ -489,6 +579,11 @@ export default function ChatLayout({ user }: Props) {
       fail(result.error);
       return;
     }
+
+    const resolvedConversationId =
+      result.conversationId ??
+      backendIdByChatRef.current.get(requestChatId) ??
+      chatsRef.current.find((c) => c.id === requestChatId)?.backendConversationId;
 
     if (result.conversationId) {
       backendIdByChatRef.current.set(requestChatId, result.conversationId);
@@ -503,6 +598,20 @@ export default function ChatLayout({ user }: Props) {
             : c,
         ),
       );
+    }
+
+    // Sync server UUIDs + branch metadata so Edit works immediately after send.
+    if (resolvedConversationId) {
+      const hist = await fetchConversationHistory(session.access_token, resolvedConversationId);
+      if (hist.ok) {
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === requestChatId
+              ? { ...c, messages: mapHistoryMessages(hist.messages), historyLoaded: true }
+              : c,
+          ),
+        );
+      }
     }
 
     const listRes = await fetchConversationList(session.access_token);
@@ -532,6 +641,171 @@ export default function ChatLayout({ user }: Props) {
       }),
     );
   }, [activeChatId, pendingAttachments]);
+
+  const handleEditMessage = useCallback(async (messageId: string, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+
+    if (!isServerMessageId(messageId)) {
+      setActionError(
+        "Edit failed: This message is still saving. Wait for the reply to finish, then try Edit again.",
+      );
+      return;
+    }
+
+    const list = chatsRef.current;
+    const requestChatId =
+      activeChatId && list.some((c) => c.id === activeChatId)
+        ? activeChatId
+        : (list.find(showChatInSidebar) ?? list[0])?.id ?? "";
+    if (!requestChatId) return;
+
+    const chat = list.find((c) => c.id === requestChatId);
+    const backendConversationId =
+      backendIdByChatRef.current.get(requestChatId) ?? chat?.backendConversationId ?? undefined;
+    if (!backendConversationId) {
+      setActionError("Edit failed: Save a reply in this chat before editing a message.");
+      return;
+    }
+
+    const msgIndex = chat?.messages.findIndex((m) => m.id === messageId) ?? -1;
+    if (msgIndex < 0) return;
+
+    // Snapshot for rollback — never leave a fake Iris “error reply” in the thread.
+    const previousMessages = chat?.messages ?? [];
+
+    setActionError(null);
+    const thinkingId = makeId();
+    const thinkingMsg: Message = {
+      id: thinkingId,
+      role: "assistant",
+      content: "__thinking__",
+      timestamp: new Date(),
+    };
+
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id !== requestChatId) return c;
+        const kept = c.messages.slice(0, msgIndex).concat({
+          ...c.messages[msgIndex],
+          content: trimmed,
+          timestamp: new Date(),
+        });
+        return { ...c, messages: [...kept, thinkingMsg] };
+      }),
+    );
+
+    const supabase = createSupabaseBrowserClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    const failEdit = (message: string) => {
+      setActionError(displayEditFailureMessage(message));
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === requestChatId ? { ...c, messages: previousMessages } : c,
+        ),
+      );
+    };
+
+    if (!session?.access_token) {
+      failEdit("You are not signed in. Please sign in again.");
+      return;
+    }
+
+    const result = await streamChatEdit(
+      session.access_token,
+      {
+        conversation_id: backendConversationId,
+        message_id: messageId,
+        content: trimmed,
+      },
+      {
+        onToken: (delta) => {
+          setChats((prev) =>
+            prev.map((c) => {
+              if (c.id !== requestChatId) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) => {
+                  if (m.id !== thinkingId) return m;
+                  if (m.content === "__thinking__") {
+                    return { ...m, content: delta, timestamp: new Date() };
+                  }
+                  return { ...m, content: m.content + delta, timestamp: new Date() };
+                }),
+              };
+            }),
+          );
+        },
+      },
+    );
+
+    if (result.error) {
+      failEdit(result.error);
+      return;
+    }
+
+    const hist = await fetchConversationHistory(session.access_token, backendConversationId);
+    if (hist.ok) {
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === requestChatId
+            ? { ...c, messages: mapHistoryMessages(hist.messages), historyLoaded: true }
+            : c,
+        ),
+      );
+    }
+
+    const listRes = await fetchConversationList(session.access_token);
+    if (listRes.ok) {
+      setChats((prev) => mergeLoadedConversations(prev, listRes.conversations));
+    }
+  }, [activeChatId]);
+
+  const handleSelectBranch = useCallback(async (targetMessageId: string) => {
+    const list = chatsRef.current;
+    const requestChatId =
+      activeChatId && list.some((c) => c.id === activeChatId)
+        ? activeChatId
+        : (list.find(showChatInSidebar) ?? list[0])?.id ?? "";
+    if (!requestChatId) return;
+
+    const chat = list.find((c) => c.id === requestChatId);
+    const backendConversationId =
+      backendIdByChatRef.current.get(requestChatId) ?? chat?.backendConversationId ?? undefined;
+    if (!backendConversationId) return;
+
+    const supabase = createSupabaseBrowserClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      setActionError("You are not signed in. Please sign in again.");
+      return;
+    }
+
+    setActionError(null);
+    const res = await selectConversationBranch(
+      session.access_token,
+      backendConversationId,
+      targetMessageId,
+    );
+    if (!res.ok) {
+      setActionError(
+        `Couldn’t switch version: ${extractApiDetail(res.detail) || "Please try again."}`,
+      );
+      return;
+    }
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === requestChatId
+          ? { ...c, messages: mapHistoryMessages(res.messages), historyLoaded: true }
+          : c,
+      ),
+    );
+  }, [activeChatId]);
 
   const handleUploadFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
@@ -1074,7 +1348,14 @@ export default function ChatLayout({ user }: Props) {
   return (
     <div className="chat-root">
       {actionError ? (
-        <div className="chat-banner-error" role="alert">
+        <div
+          className={
+            actionError.toLowerCase().includes("reached the limit")
+              ? "chat-banner-warning"
+              : "chat-banner-error"
+          }
+          role="status"
+        >
           <span>{actionError}</span>
           <button type="button" onClick={() => setActionError(null)} className="chat-banner-dismiss">
             ✕
@@ -1108,6 +1389,8 @@ export default function ChatLayout({ user }: Props) {
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             onSendMessage={handleSendMessage}
+            onEditMessage={handleEditMessage}
+            onSelectBranch={handleSelectBranch}
             onVoiceToggle={handleVoiceToggle}
             onUploadFiles={handleUploadFiles}
             onRemoveAttachment={handleRemoveAttachment}
@@ -1209,7 +1492,8 @@ const layoutStyles = `
     to { opacity: 1; }
   }
 
-  .chat-banner-error {
+  .chat-banner-error,
+  .chat-banner-warning {
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -1217,15 +1501,22 @@ const layoutStyles = `
     gap: 12px;
     padding: 10px 20px;
     font-size: 13px;
+    backdrop-filter: blur(8px);
+  }
+  .chat-banner-error {
     color: #fecaca;
     background: rgba(127, 29, 29, 0.4);
     border-bottom: 1px solid rgba(248, 113, 113, 0.2);
-    backdrop-filter: blur(8px);
+  }
+  .chat-banner-warning {
+    color: #fde68a;
+    background: rgba(120, 53, 15, 0.45);
+    border-bottom: 1px solid rgba(251, 191, 36, 0.28);
   }
   .chat-banner-dismiss {
     background: rgba(255,255,255,0.1);
     border: 1px solid rgba(255,255,255,0.15);
-    color: #fecaca;
+    color: inherit;
     font-size: 12px;
     width: 24px;
     height: 24px;
@@ -1254,8 +1545,13 @@ const layoutStyles = `
     background: rgba(254, 226, 226, 0.95);
     border-bottom: 1px solid rgba(248, 113, 113, 0.35);
   }
+  [data-theme="light"] .chat-banner-warning {
+    color: #92400e;
+    background: rgba(254, 243, 199, 0.95);
+    border-bottom: 1px solid rgba(251, 191, 36, 0.45);
+  }
   [data-theme="light"] .chat-banner-dismiss {
-    color: #991b1b;
+    color: inherit;
     border-color: rgba(0,0,0,0.1);
     background: rgba(0,0,0,0.05);
   }

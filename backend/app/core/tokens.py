@@ -22,18 +22,22 @@ def trim_messages_to_estimated_token_budget(
     max_total_tokens: int,
 ) -> List[dict]:
     """
-    Drop oldest messages until estimated token count fits budget.
-    Keeps optional leading system message; never removes the newest turn entirely — may truncate its content.
+    Drop oldest chat turns until estimated token count fits budget.
+
+    Keeps all leading consecutive ``system`` messages (persona, grounding, TOOL_RESULT)
+    so tool context is not discarded before history. Never removes the newest turn
+    entirely — may truncate its content as a last resort.
     """
     if not messages:
         return messages
 
     msgs = list(messages)
-    system_prefix: List[dict] = []
-    rest = msgs
-    if msgs and str(msgs[0].get("role", "")).lower() == "system":
-        system_prefix = [msgs[0]]
-        rest = msgs[1:]
+    prefix_end = 0
+    while prefix_end < len(msgs) and str(msgs[prefix_end].get("role", "")).lower() == "system":
+        prefix_end += 1
+    # Always keep at least the first message if it is system; otherwise no prefix.
+    system_prefix = msgs[:prefix_end]
+    rest = msgs[prefix_end:]
 
     def total_tokens(parts: List[dict]) -> int:
         return messages_estimated_tokens(parts)

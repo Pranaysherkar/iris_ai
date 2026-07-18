@@ -9,3 +9,15 @@ export type ChatCompletionRequestBody = {
   conversation_id?: string | null;
   attachment_ids?: string[] | null;
 };
+
+export type ChatEditRequestBody = {
+  conversation_id: string;
+  message_id: string;
+  content: string;
+  attachment_ids?: string[] | null;
+};
+
+export type BranchSelectRequestBody = {
+  conversation_id: string;
+  message_id: string;
+};

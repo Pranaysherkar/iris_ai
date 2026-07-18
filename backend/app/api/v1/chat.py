@@ -36,6 +36,22 @@ class ChatRequest(BaseModel):
     attachment_ids: Optional[List[str]] = None
 
 
+class ChatEditRequest(BaseModel):
+    """Fork a new sibling version of a user message, then stream a fresh assistant reply."""
+
+    conversation_id: str
+    message_id: str
+    content: str
+    attachment_ids: Optional[List[str]] = None
+
+
+class BranchSelectRequest(BaseModel):
+    """Switch the visible active path to the branch containing ``message_id``."""
+
+    conversation_id: str
+    message_id: str
+
+
 def _validate_and_normalize_messages(messages: List[ChatMessage]) -> List[ChatMessage]:
     if len(messages) > settings.CHAT_MAX_MESSAGES_PER_REQUEST:
         raise HTTPException(
@@ -54,7 +70,7 @@ def _validate_and_normalize_messages(messages: List[ChatMessage]) -> List[ChatMe
     return normalized
 
 
-def _persist_user_message(conversation_id: str, user_id: str, messages: List[ChatMessage]) -> None:
+def _persist_user_message(conversation_id: str, user_id: str, messages: List[ChatMessage]) -> str:
     if not messages:
         raise HTTPException(status_code=400, detail="At least one message is required")
 
@@ -63,7 +79,7 @@ def _persist_user_message(conversation_id: str, user_id: str, messages: List[Cha
         raise HTTPException(status_code=400, detail="Last message must be from user")
     if not latest_message.content.strip():
         raise HTTPException(status_code=400, detail="User message content cannot be empty")
-    chat_repository.persist_user_message(conversation_id, user_id, latest_message.content)
+    return chat_repository.persist_user_message(conversation_id, user_id, latest_message.content)
 
 
 def _persist_assistant_message(
@@ -257,7 +273,7 @@ async def chat_endpoint(
     )
 
     user_message_text = messages[-1].content
-    _persist_user_message(conversation_id, user_id, messages)
+    user_message_id = _persist_user_message(conversation_id, user_id, messages)
 
     extract_and_persist_facts(
         user_id,
@@ -290,7 +306,11 @@ async def chat_endpoint(
             usage_holder,
         ),
         media_type="text/event-stream",
-        headers={"X-Conversation-Id": conversation_id, "X-Request-ID": rid},
+        headers={
+            "X-Conversation-Id": conversation_id,
+            "X-Request-ID": rid,
+            "X-User-Message-Id": user_message_id,
+        },
     )
 
 
@@ -300,6 +320,100 @@ async def chat_history_endpoint(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ):
     history = chat_repository.get_conversation_history(conversation_id, user_id)
+    return {
+        "conversation_id": conversation_id,
+        "messages": history,
+    }
+
+
+@router.post("/chat/edit")
+async def chat_edit_endpoint(
+    request: Request,
+    payload: ChatEditRequest,
+    user_id: Annotated[str, Depends(get_current_user_id_chat_ratelimited)],
+):
+    """
+    ChatGPT-style edit: create a sibling branch for ``message_id``, deactivate its
+    old subtree, then stream a new assistant reply on the new active path.
+    """
+    content = normalize_text(payload.content)
+    if not content:
+        raise HTTPException(status_code=400, detail="User message content cannot be empty")
+    if len(content) > settings.CHAT_MAX_MESSAGE_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Message exceeds maximum length ({settings.CHAT_MAX_MESSAGE_CHARS} characters).",
+        )
+    await moderate_user_input(content)
+
+    conversation_id = chat_repository.resolve_conversation_id(user_id, payload.conversation_id)
+    rid = getattr(request.state, "request_id", "-")
+    logger.info(
+        "chat_edit user=%s conversation=%s source_message=%s request_id=%s",
+        user_id,
+        conversation_id,
+        payload.message_id,
+        rid,
+    )
+
+    new_user_message_id = chat_repository.create_edit_branch(
+        conversation_id,
+        user_id,
+        payload.message_id,
+        content,
+    )
+
+    extract_and_persist_facts(
+        user_id,
+        content,
+        conversation_id=conversation_id,
+    )
+
+    formatted_messages = _load_conversation_memory(
+        conversation_id,
+        user_id,
+        settings.CHAT_MEMORY_WINDOW,
+    )
+    if not formatted_messages:
+        formatted_messages = [{"role": "user", "content": content}]
+
+    formatted_messages = await build_chat_model_messages(
+        formatted_messages,
+        content,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        attachment_ids=payload.attachment_ids,
+    )
+
+    usage_holder: dict = {}
+    return StreamingResponse(
+        _stream_and_capture_assistant_response(
+            formatted_messages,
+            conversation_id,
+            user_id,
+            usage_holder,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "X-Conversation-Id": conversation_id,
+            "X-Request-ID": rid,
+            "X-User-Message-Id": new_user_message_id,
+        },
+    )
+
+
+@router.post("/chat/branch/select")
+async def chat_branch_select_endpoint(
+    payload: BranchSelectRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Activate the branch path through ``message_id`` and return the new active history."""
+    conversation_id = chat_repository.resolve_conversation_id(user_id, payload.conversation_id)
+    history = chat_repository.switch_active_branch(
+        conversation_id,
+        user_id,
+        payload.message_id,
+    )
     return {
         "conversation_id": conversation_id,
         "messages": history,

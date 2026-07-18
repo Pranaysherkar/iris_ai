@@ -25,7 +25,7 @@ if settings.cors_allow_all:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Conversation-Id", "X-Request-ID"],
+        expose_headers=["X-Conversation-Id", "X-Request-ID", "X-User-Message-Id"],
     )
 else:
     app.add_middleware(
@@ -34,7 +34,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Conversation-Id", "X-Request-ID"],
+        expose_headers=["X-Conversation-Id", "X-Request-ID", "X-User-Message-Id"],
     )
 
 # Runs first on incoming requests (registered after CORS).
