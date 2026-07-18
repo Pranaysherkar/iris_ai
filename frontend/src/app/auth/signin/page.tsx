@@ -1,12 +1,15 @@
 import { Suspense } from "react";
 
+import BackendWarmupGate from "@/components/warmup/BackendWarmupGate";
 import SignInClient from "./SignInClient";
 
 export default function SignInPage() {
   return (
-    <Suspense fallback={<SignInFallback />}>
-      <SignInClient />
-    </Suspense>
+    <BackendWarmupGate>
+      <Suspense fallback={<SignInFallback />}>
+        <SignInClient />
+      </Suspense>
+    </BackendWarmupGate>
   );
 }
 

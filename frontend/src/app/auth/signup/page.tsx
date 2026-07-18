@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import VerifyEmailModal from "@/components/auth/VerifyEmailModal";
+import BackendWarmupGate from "@/components/warmup/BackendWarmupGate";
 import { publicAppUrl } from "@/lib/site-url";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 import { signInWithGoogle } from "@/lib/supabase/google-auth";
@@ -107,6 +108,7 @@ export default function SignUpPage() {
   };
 
   return (
+    <BackendWarmupGate>
     <div className="auth-root">
       <div className="blob blob-1" />
       <div className="blob blob-2" />
@@ -299,6 +301,7 @@ export default function SignUpPage() {
 
       <style>{authStyles}</style>
     </div>
+    </BackendWarmupGate>
   );
 }
 
