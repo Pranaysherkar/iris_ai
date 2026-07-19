@@ -17,6 +17,7 @@ from app.core.text_normalize import normalize_text
 from app.repositories.chat_repository import chat_repository, conversation_title_from_first_message
 from app.services.ai_service import ai_service
 from app.services.chat_tools import build_chat_model_messages
+from app.services.context_builder import sanitize_user_facing_assistant_text
 from app.services.memory_service import extract_and_persist_facts
 from app.services.moderation import moderate_user_input
 
@@ -240,7 +241,7 @@ async def _stream_and_capture_assistant_response(
 
         yield event_chunk
 
-    full_reply = "".join(assistant_text_parts)
+    full_reply = sanitize_user_facing_assistant_text("".join(assistant_text_parts))
     _persist_assistant_message(
         conversation_id,
         user_id,

@@ -3,12 +3,49 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from app.core.config import settings
 from app.core.greeting import is_likely_greeting_only_user_message
 from app.core.prompts import get_document_grounding_prompt, get_tool_grounding_prompt
 from app.core.tool_schemas import RouteDecision, ToolResult
+
+# Strip leaked internal labels if the model still cites them.
+_LEAKED_SOURCE_PREFIX = re.compile(
+    r"^\s*(?:"
+    r"(?:according\s+to|based\s+on|from|per)\s+"
+    r"(?:the\s+)?"
+    r"(?:tool[_\s-]?result|live[_\s-]?context|tool\s+result|live\s+data|json(?:\s+below)?|system(?:\s+message)?)"
+    r"(?:\s+you\s+provided(?:\s+earlier)?)?"
+    r"[,:]?\s*"
+    r")+",
+    re.IGNORECASE,
+)
+_LEAKED_LABEL = re.compile(
+    r"\b(?:TOOL_RESULT|LIVE_CONTEXT)\b",
+    re.IGNORECASE,
+)
+
+
+def sanitize_user_facing_assistant_text(text: str) -> str:
+    """Remove internal tool/system labels from assistant text shown to users."""
+    if not text:
+        return text
+    cleaned = text
+    # Repeat: model may stack “According to the TOOL_RESULT, based on…”
+    for _ in range(3):
+        nxt = _LEAKED_SOURCE_PREFIX.sub("", cleaned, count=1)
+        if nxt == cleaned:
+            break
+        cleaned = nxt
+    cleaned = _LEAKED_LABEL.sub("", cleaned)
+    # Fix awkward leftovers like ", the introduction" after strip → capitalize first letter.
+    cleaned = cleaned.lstrip(" ,:-")
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
 
 
 def build_clarification_message(decision: RouteDecision) -> dict[str, str]:
@@ -40,28 +77,74 @@ def _human_fetch_time(iso_ts: str) -> str:
 
 
 def _compact_tool_data(result: ToolResult) -> dict:
-    """Shrink tool payloads for the LLM (especially web_search snippets)."""
+    """Shrink tool payloads for the LLM so Groq TPM stays under free-tier limits."""
     data = result.data if isinstance(result.data, dict) else {}
-    if result.tool_name != "web_search":
-        return data
+    name = result.tool_name
 
-    rows = data.get("results") or []
-    compact_rows = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        compact_rows.append(
-            {
-                "title": str(row.get("title") or "").strip(),
-                "url": str(row.get("url") or "").strip(),
-                "snippet": str(row.get("content") or row.get("snippet") or "").strip(),
-            }
-        )
-    return {
-        "query": data.get("query"),
-        "result_count": len(compact_rows),
-        "results": compact_rows,
-    }
+    if name == "web_search":
+        rows = data.get("results") or []
+        compact_rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            compact_rows.append(
+                {
+                    "title": str(row.get("title") or "").strip(),
+                    "url": str(row.get("url") or "").strip(),
+                    "snippet": str(row.get("content") or row.get("snippet") or "").strip(),
+                }
+            )
+        return {
+            "query": data.get("query"),
+            "result_count": len(compact_rows),
+            "results": compact_rows,
+        }
+
+    if name == "news_rss":
+        max_h = max(1, int(settings.TOOL_NEWS_RSS_MAX_HEADLINES))
+        desc_chars = max(40, int(settings.TOOL_NEWS_RSS_DESC_CHARS))
+        compact: list[dict[str, str]] = []
+        for row in (data.get("headlines") or [])[:max_h]:
+            if not isinstance(row, dict):
+                continue
+            desc = str(row.get("description") or "").strip()
+            if len(desc) > desc_chars:
+                desc = desc[:desc_chars].rstrip() + "…"
+            compact.append(
+                {
+                    "title": str(row.get("title") or "").strip(),
+                    "url": str(row.get("url") or "").strip(),
+                    "description": desc,
+                }
+            )
+        return {
+            "topic_filter": data.get("topic_filter"),
+            "headline_count": len(compact),
+            "headlines": compact,
+        }
+
+    if name == "web_fetch":
+        max_chars = max(500, int(settings.TOOL_WEB_FETCH_MAX_CHARS))
+        content = str(data.get("content") or "")
+        return {
+            "url": data.get("url"),
+            "title": data.get("title"),
+            "content": content[:max_chars],
+            "content_truncated": bool(data.get("content_truncated")) or len(content) > max_chars,
+        }
+
+    if name == "wikipedia":
+        max_chars = max(400, int(settings.TOOL_WIKIPEDIA_SUMMARY_CHARS))
+        summary = str(data.get("summary") or "")
+        return {
+            "topic_query": data.get("topic_query"),
+            "title": data.get("title"),
+            "url": data.get("url"),
+            "summary": summary[:max_chars],
+            "summary_truncated": bool(data.get("summary_truncated")) or len(summary) > max_chars,
+        }
+
+    return data
 
 
 def build_tool_context_message(
@@ -99,7 +182,9 @@ def build_tool_context_message(
         instruction = (
             "Use ONLY the JSON below for live factual claims. "
             "Do NOT say you lack real-time access, internet, or cannot fetch live data — "
-            "this TOOL_RESULT is live data. Answer the user's question directly from data. "
+            "the JSON below is live data. Answer the user's question directly from data. "
+            "Never mention tools, tool names, APIs, backends, JSON, or this system message. "
+            "Do not cite your source — answer naturally as Iris (no “According to…” openers). "
             f"{place_hint}"
             f"{web_search_hint}"
             "Do not invent missing fields. "
@@ -111,17 +196,18 @@ def build_tool_context_message(
         )
     else:
         instruction = (
-            "The tool call FAILED. Do not invent live data. "
-            "Reply in a professional, helpful tone — never say “tool call failed”, "
+            "Live lookup FAILED. Do not invent live data. "
+            "Reply in a professional, helpful tone — never say a tool or API failed, "
             "never quote raw error strings, JSON, or internal messages. "
             "Explain briefly in plain language what you could not get. "
             "For news with a city/region filter and no results: say local/city feeds are not "
             "available yet, then offer today’s world headlines or another topic. "
             "Offer one clear next step (broader query, different topic, or world news)."
         )
+    # No ALL_CAPS label — models often cite headers like "TOOL_RESULT" to the user.
     return {
         "role": "system",
-        "content": f"TOOL_RESULT\n{instruction}\n{body}",
+        "content": f"{instruction}\n{body}",
     }
 
 
@@ -161,7 +247,8 @@ def build_substantive_request_message(user_message: str) -> Optional[dict[str, s
         "content": (
             "REQUEST_PRIORITY: The latest user message is NOT greeting-only — it includes a real ask. "
             "Do not reply with only a greeting like “Hi! What can I help you with?”. "
-            "Answer the user's request (use TOOL_RESULT when present)."
+            "Answer the user's request directly (use live data from system context when present). "
+            "Never mention tools, APIs, or internal system labels to the user."
         ),
     }
 

@@ -64,7 +64,7 @@ def _fit_results_to_token_budget(
     kept: List[dict[str, str]] = []
     for row in results:
         candidate = kept + [row]
-        # Mirror roughly what we put into TOOL_RESULT JSON.
+        # Mirror roughly what we put into LIVE_CONTEXT JSON.
         est = estimate_tokens(str(candidate))
         if kept and est > max_context_tokens:
             break

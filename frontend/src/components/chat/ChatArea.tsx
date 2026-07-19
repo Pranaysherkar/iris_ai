@@ -15,11 +15,16 @@ type Props = {
   onEditMessage?: (messageId: string, content: string) => Promise<void>;
   onSelectBranch?: (targetMessageId: string) => Promise<void>;
   onVoiceToggle?: () => Promise<void>;
+  /** Stop TTS audio only; text reply keeps streaming. */
+  onStopVoiceTts?: () => void;
   onUploadFiles?: (files: File[]) => Promise<void>;
   onRemoveAttachment?: (id: string) => void;
   pendingAttachments?: PendingAttachment[];
   voiceRecording?: boolean;
   voiceBusy?: boolean;
+  voiceTtsActive?: boolean;
+  /** True only while TTS audio is actually playing. */
+  voiceSpeaking?: boolean;
   userFirstName?: string;
   historyLoading?: boolean;
   historyError?: string | null;
@@ -93,11 +98,14 @@ export default function ChatArea({
   onEditMessage,
   onSelectBranch,
   onVoiceToggle,
+  onStopVoiceTts,
   onUploadFiles,
   onRemoveAttachment,
   pendingAttachments = [],
   voiceRecording = false,
   voiceBusy = false,
+  voiceTtsActive = false,
+  voiceSpeaking = false,
   userFirstName,
   historyLoading = false,
   historyError = null,
@@ -231,11 +239,14 @@ export default function ChatArea({
       <ChatInput
         onSend={(content, attachmentIds) => onSendMessage(content, attachmentIds)}
         onVoiceToggle={onVoiceToggle}
+        onStopVoiceTts={onStopVoiceTts}
         onUploadFiles={onUploadFiles}
         onRemoveAttachment={onRemoveAttachment}
         pendingAttachments={pendingAttachments}
         voiceRecording={voiceRecording}
         voiceBusy={voiceBusy}
+        voiceTtsActive={voiceTtsActive}
+        voiceSpeaking={voiceSpeaking}
         disabled={voiceBusy}
       />
 

@@ -72,7 +72,10 @@ async def run(args: dict[str, Any]) -> ToolResult:
             error="No RSS feeds configured (TOOL_NEWS_RSS_FEEDS).",
         )
 
-    per_feed = max(1, min(int(args.get("per_feed") or 3), 10))
+    max_headlines = max(1, min(int(settings.TOOL_NEWS_RSS_MAX_HEADLINES), 15))
+    desc_chars = max(40, int(settings.TOOL_NEWS_RSS_DESC_CHARS))
+    # Fetch a few per feed, then keep a global top-N for TPM.
+    per_feed = max(1, min(int(args.get("per_feed") or 4), 8))
     topic = str(args.get("topic") or args.get("query") or "").strip().lower()
     headlines: list[dict[str, str]] = []
     errors: list[str] = []
@@ -82,12 +85,21 @@ async def run(args: dict[str, Any]) -> ToolResult:
             xml_text = await fetch_text(feed_url)
             items = _parse_rss_items(xml_text, limit=per_feed)
             for item in items:
-                item["feed"] = feed_url
                 if topic:
                     blob = f"{item.get('title', '')} {item.get('description', '')}".lower()
                     if topic not in blob:
                         continue
-                headlines.append(item)
+                desc = str(item.get("description") or "").strip()
+                if len(desc) > desc_chars:
+                    desc = desc[:desc_chars].rstrip() + "…"
+                headlines.append(
+                    {
+                        "title": str(item.get("title") or "").strip(),
+                        "url": str(item.get("url") or "").strip(),
+                        "description": desc,
+                        "published": str(item.get("published") or "").strip(),
+                    }
+                )
         except (httpx.HTTPError, ET.ParseError) as exc:
             errors.append(f"{feed_url}: {exc}")
             continue
@@ -105,13 +117,13 @@ async def run(args: dict[str, Any]) -> ToolResult:
             msg += f" (feed issues: {'; '.join(errors[:2])})"
         return failure_result(tool_name=TOOL_NAME, source=SOURCE, error=msg)
 
+    kept = headlines[:max_headlines]
     return success_result(
         tool_name=TOOL_NAME,
         source=SOURCE,
         data={
             "topic_filter": topic or None,
-            "headline_count": len(headlines),
-            "headlines": headlines[:15],
-            "feeds_used": feeds,
+            "headline_count": len(kept),
+            "headlines": kept,
         },
     )

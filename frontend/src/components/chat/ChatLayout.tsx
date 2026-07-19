@@ -54,6 +54,15 @@ function displayChatFailureMessage(raw: string): string {
   ) {
     return detail;
   }
+  // Groq TPM / request-too-large (often news + history on free tier).
+  if (
+    t.includes("rate_limit") ||
+    t.includes("tokens per minute") ||
+    t.includes("request too large") ||
+    t.includes("tpm")
+  ) {
+    return "This request was too large for the AI right now. Try a shorter question, or wait a moment and try again.";
+  }
   return CHAT_GENERIC_USER_ERROR;
 }
 
@@ -117,21 +126,38 @@ export type Message = {
   branchSiblings?: BranchSibling[];
 };
 
-function mapHistoryMessages(rows: HistoryMessageDto[]): Message[] {
+function mapHistoryMessages(
+  rows: HistoryMessageDto[],
+  previousMessages?: Message[],
+): Message[] {
   return rows
     .filter((m) => m.role === "user" || m.role === "assistant")
-    .map((m) => ({
-      id: m.id,
-      role: m.role as "user" | "assistant",
-      content: m.content,
-      timestamp: m.created_at ? new Date(m.created_at) : new Date(),
-      branchVersion: m.branch_version ?? 1,
-      branchTotal: m.branch_total ?? 1,
-      branchSiblings: (m.branch_siblings ?? []).map((s) => ({
-        id: s.id,
-        branchVersion: s.branch_version,
-      })),
-    }));
+    .map((m) => {
+      const content = m.content;
+      let inputMode: Message["inputMode"] | undefined;
+      if (m.role === "user" && previousMessages?.length) {
+        const prevVoice = previousMessages.find(
+          (p) =>
+            p.role === "user" &&
+            p.inputMode === "voice" &&
+            p.content.trim() === content.trim(),
+        );
+        if (prevVoice) inputMode = "voice";
+      }
+      return {
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        content,
+        timestamp: m.created_at ? new Date(m.created_at) : new Date(),
+        inputMode,
+        branchVersion: m.branch_version ?? 1,
+        branchTotal: m.branch_total ?? 1,
+        branchSiblings: (m.branch_siblings ?? []).map((s) => ({
+          id: s.id,
+          branchVersion: s.branch_version,
+        })),
+      };
+    });
 }
 
 /** Local UI id + optional Supabase conversation UUID returned by the API (`X-Conversation-Id`). */
@@ -276,14 +302,29 @@ export default function ChatLayout({ user }: Props) {
   const voiceLiveUserMsgIdRef = useRef<string | null>(null);
   const voiceLiveChatIdRef = useRef<string | null>(null);
   const audioQueueRef = useRef<AudioPlaybackQueue | null>(null);
+  /** Prevents double-submit from mic tap + 2.5s silence VAD. */
+  const voiceToggleLockRef = useRef(false);
+  const handleVoiceToggleRef = useRef<(() => Promise<void>) | null>(null);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  /** True while TTS may play; false after user taps Stop (text stream continues). */
+  const [voiceTtsActive, setVoiceTtsActive] = useState(false);
+  /** True only while real TTS audio is playing (not merely while tokens stream). */
+  const [voiceSpeaking, setVoiceSpeaking] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const attachPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   if (!voiceRecorderRef.current) voiceRecorderRef.current = new VoiceRecorder();
   if (!liveSpeechRef.current) liveSpeechRef.current = new LiveSpeechRecognizer();
   if (!audioQueueRef.current) audioQueueRef.current = new AudioPlaybackQueue();
+
+  useEffect(() => {
+    const queue = audioQueueRef.current;
+    if (!queue) return;
+    queue.setPlayingChangeListener((playing) => setVoiceSpeaking(playing));
+    return () => queue.setPlayingChangeListener(null);
+  }, []);
+
   useLayoutEffect(() => {
     chatsRef.current = chats;
     for (const c of chats) {
@@ -370,11 +411,10 @@ export default function ChatLayout({ user }: Props) {
         return;
       }
 
-      const mapped = mapHistoryMessages(res.messages);
-
       setChats((prev) =>
         prev.map((c) => {
           if (c.id !== chat.id) return c;
+          const mapped = mapHistoryMessages(res.messages, c.messages);
           const firstUser = mapped.find((m) => m.role === "user");
           const titleFromFirst =
             firstUser && isPlaceholderTitle(c.title)
@@ -607,7 +647,11 @@ export default function ChatLayout({ user }: Props) {
         setChats((prev) =>
           prev.map((c) =>
             c.id === requestChatId
-              ? { ...c, messages: mapHistoryMessages(hist.messages), historyLoaded: true }
+              ? {
+                  ...c,
+                  messages: mapHistoryMessages(hist.messages, c.messages),
+                  historyLoaded: true,
+                }
               : c,
           ),
         );
@@ -752,7 +796,11 @@ export default function ChatLayout({ user }: Props) {
       setChats((prev) =>
         prev.map((c) =>
           c.id === requestChatId
-            ? { ...c, messages: mapHistoryMessages(hist.messages), historyLoaded: true }
+            ? {
+                ...c,
+                messages: mapHistoryMessages(hist.messages, c.messages),
+                historyLoaded: true,
+              }
             : c,
         ),
       );
@@ -801,7 +849,11 @@ export default function ChatLayout({ user }: Props) {
     setChats((prev) =>
       prev.map((c) =>
         c.id === requestChatId
-          ? { ...c, messages: mapHistoryMessages(res.messages), historyLoaded: true }
+          ? {
+              ...c,
+              messages: mapHistoryMessages(res.messages, c.messages),
+              historyLoaded: true,
+            }
           : c,
       ),
     );
@@ -992,14 +1044,27 @@ export default function ChatLayout({ user }: Props) {
   const finishVoiceTurn = useCallback(async () => {
     await audioQueueRef.current?.whenIdle();
     setVoiceBusy(false);
+    setVoiceTtsActive(false);
+    setVoiceSpeaking(false);
+    audioQueueRef.current?.setMuted(false);
+  }, []);
+
+  /** Stop speaking only — LLM/text SSE keeps running until the reply is complete. */
+  const handleStopVoiceTts = useCallback(() => {
+    audioQueueRef.current?.setMuted(true);
+    setVoiceTtsActive(false);
+    setVoiceSpeaking(false);
   }, []);
 
   const handleVoiceToggle = useCallback(async () => {
-    if (voiceBusy) return;
+    if (voiceBusy || voiceToggleLockRef.current) return;
 
     const recorder = voiceRecorderRef.current!;
     const liveSpeech = liveSpeechRef.current!;
     const audioQueue = audioQueueRef.current!;
+    audioQueue.setMuted(false);
+    setVoiceTtsActive(false);
+    setVoiceSpeaking(false);
 
     const list = chatsRef.current;
     const requestChatId =
@@ -1036,7 +1101,13 @@ export default function ChatLayout({ user }: Props) {
       );
 
       try {
-        await recorder.start();
+        await recorder.start({
+          silenceMs: 2500,
+          onSilence: () => {
+            // End-of-speech VAD — same path as tapping mic again.
+            void handleVoiceToggleRef.current?.();
+          },
+        });
         if (LiveSpeechRecognizer.supported()) {
           liveSpeech.start({
             onInterim: (text) => updateLiveVoiceUserMessage(requestChatId, userMsgId, text),
@@ -1054,8 +1125,11 @@ export default function ChatLayout({ user }: Props) {
       return;
     }
 
+    voiceToggleLockRef.current = true;
     setVoiceRecording(false);
     setVoiceBusy(true);
+    setVoiceTtsActive(true);
+    audioQueue.setMuted(false);
 
     const userMsgId = voiceLiveUserMsgIdRef.current;
     const liveChatId = voiceLiveChatIdRef.current ?? requestChatId;
@@ -1067,6 +1141,8 @@ export default function ChatLayout({ user }: Props) {
     if (!liveChatId || !userMsgId) {
       recorder.cancel();
       setVoiceBusy(false);
+      setVoiceTtsActive(false);
+      voiceToggleLockRef.current = false;
       return;
     }
 
@@ -1078,6 +1154,8 @@ export default function ChatLayout({ user }: Props) {
       removeLiveVoiceUserMessage(liveChatId, userMsgId);
       setActionError("Could not capture audio. Please try again.");
       setVoiceBusy(false);
+      setVoiceTtsActive(false);
+      voiceToggleLockRef.current = false;
       return;
     }
 
@@ -1085,6 +1163,8 @@ export default function ChatLayout({ user }: Props) {
       removeLiveVoiceUserMessage(liveChatId, userMsgId);
       setActionError("Recording too short. Hold the mic a little longer.");
       setVoiceBusy(false);
+      setVoiceTtsActive(false);
+      voiceToggleLockRef.current = false;
       return;
     }
 
@@ -1133,6 +1213,8 @@ export default function ChatLayout({ user }: Props) {
         console.warn("[voice chat]", message);
       }
       audioQueue.stop();
+      setVoiceTtsActive(false);
+      audioQueue.setMuted(false);
       setActionError(display);
       setChats((prev) =>
         prev.map((c) => {
@@ -1159,6 +1241,9 @@ export default function ChatLayout({ user }: Props) {
     if (!session?.access_token) {
       fail("You are not signed in. Please sign in again.");
       setVoiceBusy(false);
+      setVoiceTtsActive(false);
+      audioQueue.setMuted(false);
+      voiceToggleLockRef.current = false;
       return;
     }
 
@@ -1168,30 +1253,6 @@ export default function ChatLayout({ user }: Props) {
       undefined;
 
     audioQueue.stop();
-
-    const appendVoiceSpokenPhrase = (phrase: string) => {
-      const trimmed = phrase.trim();
-      if (!trimmed) return;
-      setChats((prev) =>
-        prev.map((c) => {
-          if (c.id !== liveChatId) return c;
-          return {
-            ...c,
-            messages: c.messages.map((m) => {
-              if (m.id !== thinkingId) return m;
-              if (m.content === "__thinking__" || m.content === "") {
-                return { ...m, content: trimmed, timestamp: new Date() };
-              }
-              return {
-                ...m,
-                content: `${m.content} ${trimmed}`,
-                timestamp: new Date(),
-              };
-            }),
-          };
-        }),
-      );
-    };
 
     const setVoiceAssistantFullReply = (fullText: string) => {
       if (!fullText.trim()) return;
@@ -1230,13 +1291,27 @@ export default function ChatLayout({ user }: Props) {
             ),
           );
         },
-        onToken: () => {
-          /* LLM tokens buffered server-side; reveal synced with TTS onStart. */
+        // Full reply text (incl. code) streams here; TTS separately speaks prose only.
+        onToken: (delta) => {
+          setChats((prev) =>
+            prev.map((c) => {
+              if (c.id !== liveChatId) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) => {
+                  if (m.id !== thinkingId) return m;
+                  if (m.content === "__thinking__") {
+                    return { ...m, content: delta, timestamp: new Date() };
+                  }
+                  return { ...m, content: m.content + delta, timestamp: new Date() };
+                }),
+              };
+            }),
+          );
         },
         onAudio: (chunk) => {
-          audioQueue.enqueueBase64(chunk.data, chunk.mime, () => {
-            if (chunk.phrase) appendVoiceSpokenPhrase(chunk.phrase);
-          });
+          // Dropped when user stops voice; text stream above keeps going.
+          audioQueue.enqueueBase64(chunk.data, chunk.mime);
         },
         onDone: (fullText) => {
           pendingFullReply = fullText;
@@ -1254,12 +1329,20 @@ export default function ChatLayout({ user }: Props) {
     if (result.error) {
       fail(result.error);
       setVoiceBusy(false);
+      setVoiceTtsActive(false);
+      audioQueue.setMuted(false);
+      voiceToggleLockRef.current = false;
       return;
     }
 
     if (result.fullReply) {
       pendingFullReply = result.fullReply;
     }
+
+    const resolvedConversationId =
+      result.conversationId ??
+      backendIdByChatRef.current.get(liveChatId) ??
+      chatsRef.current.find((c) => c.id === liveChatId)?.backendConversationId;
 
     if (result.conversationId) {
       backendIdByChatRef.current.set(liveChatId, result.conversationId);
@@ -1274,6 +1357,26 @@ export default function ChatLayout({ user }: Props) {
             : c,
         ),
       );
+    }
+
+    // Sync server UUIDs so voice bubbles get Edit / branch controls like text chat.
+    if (resolvedConversationId) {
+      const prevMessages =
+        chatsRef.current.find((c) => c.id === liveChatId)?.messages ?? [];
+      const hist = await fetchConversationHistory(session.access_token, resolvedConversationId);
+      if (hist.ok) {
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === liveChatId
+              ? {
+                  ...c,
+                  messages: mapHistoryMessages(hist.messages, prevMessages),
+                  historyLoaded: true,
+                }
+              : c,
+          ),
+        );
+      }
     }
 
     const listRes = await fetchConversationList(session.access_token);
@@ -1300,9 +1403,16 @@ export default function ChatLayout({ user }: Props) {
     );
 
     await finishVoiceTurn();
+    voiceToggleLockRef.current = false;
 
     if (pendingFullReply) {
-      setVoiceAssistantFullReply(pendingFullReply);
+      // Only apply streamed reply if history sync did not already replace the thread.
+      const stillHasThinking = chatsRef.current
+        .find((c) => c.id === liveChatId)
+        ?.messages.some((m) => m.id === thinkingId);
+      if (stillHasThinking) {
+        setVoiceAssistantFullReply(pendingFullReply);
+      }
     }
   }, [
     activeChatId,
@@ -1312,6 +1422,8 @@ export default function ChatLayout({ user }: Props) {
     updateLiveVoiceUserMessage,
     removeLiveVoiceUserMessage,
   ]);
+
+  handleVoiceToggleRef.current = handleVoiceToggle;
 
   const handleDeleteChat = useCallback(async (chatId: string) => {
     const target = chatsRef.current.find((c) => c.id === chatId);
@@ -1392,11 +1504,14 @@ export default function ChatLayout({ user }: Props) {
             onEditMessage={handleEditMessage}
             onSelectBranch={handleSelectBranch}
             onVoiceToggle={handleVoiceToggle}
+            onStopVoiceTts={handleStopVoiceTts}
             onUploadFiles={handleUploadFiles}
             onRemoveAttachment={handleRemoveAttachment}
             pendingAttachments={pendingAttachments}
             voiceRecording={voiceRecording}
             voiceBusy={voiceBusy}
+            voiceTtsActive={voiceTtsActive}
+            voiceSpeaking={voiceSpeaking}
             historyLoading={historyLoading}
             historyError={activeChat.historyError ?? null}
             onRetryHistory={handleRetryHistory}

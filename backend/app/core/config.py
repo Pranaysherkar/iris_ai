@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     CHAT_MAX_MESSAGES_PER_REQUEST: int = 50
     """Approximate max input tokens (history + system) before trimming oldest turns."""
     CHAT_MAX_CONTEXT_TOKENS_ESTIMATE: int = 12_000
+    """Tighter input budget for voice (Groq free-tier TPM; leave room for completion)."""
+    VOICE_MAX_CONTEXT_TOKENS_ESTIMATE: int = 5_000
     CHAT_MEMORY_WINDOW: int = 30
 
     # Query preprocessing (spell map + follow-up rewrite before routing).
@@ -68,8 +70,16 @@ class Settings(BaseSettings):
     TOOL_WEB_SEARCH_MAX_RESULTS: int = 10
     """Max characters kept per result snippet (title/url untouched)."""
     TOOL_WEB_SEARCH_SNIPPET_CHARS: int = 400
-    """Hard cap for the web_search TOOL_RESULT block (~tokens); drops lowest ranks first."""
+    """Hard cap for the web_search LIVE_CONTEXT block (~tokens); drops lowest ranks first."""
     TOOL_WEB_SEARCH_MAX_CONTEXT_TOKENS: int = 3500
+    """Max page body chars injected from web_fetch (TPM-safe)."""
+    TOOL_WEB_FETCH_MAX_CHARS: int = 4_000
+    """Max Wikipedia extract chars injected for the LLM."""
+    TOOL_WIKIPEDIA_SUMMARY_CHARS: int = 2_000
+    """Max headlines kept from news_rss for the LLM."""
+    TOOL_NEWS_RSS_MAX_HEADLINES: int = 8
+    """Max description chars per news headline."""
+    TOOL_NEWS_RSS_DESC_CHARS: int = 160
     TOOL_WIKIPEDIA_ENABLED: bool = True
     TOOL_NEWS_RSS_ENABLED: bool = True
     TOOL_EXCHANGE_RATES_ENABLED: bool = True
@@ -144,12 +154,13 @@ class Settings(BaseSettings):
     """Browser live text is preview only; Sarvam STT is always used when possible."""
     SPEECH_CLIENT_TRANSCRIPT_ENABLED: bool = False
     """Max LLM tokens for voice replies (must be high enough to finish full answers)."""
-    VOICE_MAX_TOKENS: int = 512
+    VOICE_MAX_TOKENS: int = 2048
     VOICE_TTS_MIN_SENTENCE_CHARS: int = 6
     """Force early TTS phrase split when buffer grows this long without punctuation."""
     VOICE_TTS_MAX_PHRASE_CHARS: int = 48
     VOICE_TOOLS_ENABLED: bool = True
-    GROQ_VOICE_MODEL: str = "llama-3.1-8b-instant"
+    """Same family as text chat for quality; keep VOICE_MAX_CONTEXT_TOKENS_ESTIMATE tight for TPM."""
+    GROQ_VOICE_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
 
     SARVAM_API_KEY: Optional[str] = None

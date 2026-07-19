@@ -89,6 +89,7 @@ async def run(args: dict[str, Any]) -> ToolResult:
 
     page_url = page.get("fullurl") or f"https://en.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
 
+    max_chars = max(400, int(settings.TOOL_WIKIPEDIA_SUMMARY_CHARS))
     return success_result(
         tool_name=TOOL_NAME,
         source=SOURCE,
@@ -96,7 +97,7 @@ async def run(args: dict[str, Any]) -> ToolResult:
             "topic_query": topic,
             "title": title,
             "url": page_url,
-            "summary": extract[:4_000],
-            "summary_truncated": len(extract) > 4_000,
+            "summary": extract[:max_chars],
+            "summary_truncated": len(extract) > max_chars,
         },
     )

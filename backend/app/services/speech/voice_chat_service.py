@@ -21,6 +21,7 @@ from app.core.text_normalize import normalize_text
 from app.repositories.chat_repository import chat_repository
 from app.services.ai_service import ai_service
 from app.services.chat_tools import build_chat_model_messages
+from app.services.context_builder import sanitize_user_facing_assistant_text
 from app.services.memory_service import extract_and_persist_facts
 from app.services.moderation import moderate_user_input
 from app.services.speech.sentence_buffer import flush_remainder, flush_sentence
@@ -305,7 +306,7 @@ async def stream_voice_chat_turn(
         elif next_tts_out >= len(tts_tasks):
             break
 
-    full_reply = "".join(assistant_parts)
+    full_reply = sanitize_user_facing_assistant_text("".join(assistant_parts))
     if full_reply.strip():
         _persist_assistant_message(
             resolved_conversation_id,

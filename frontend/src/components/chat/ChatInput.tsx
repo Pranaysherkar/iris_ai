@@ -12,22 +12,31 @@ export type PendingAttachment = AttachmentDto & {
 type Props = {
   onSend: (content: string, attachmentIds: string[]) => Promise<void>;
   onVoiceToggle?: () => Promise<void>;
+  /** Stop TTS only; text keeps streaming until the reply finishes. */
+  onStopVoiceTts?: () => void;
   onUploadFiles?: (files: File[]) => Promise<void>;
   onRemoveAttachment?: (id: string) => void;
   pendingAttachments?: PendingAttachment[];
   voiceRecording?: boolean;
   voiceBusy?: boolean;
+  /** TTS not muted — Stop still available; does not mean audio is playing. */
+  voiceTtsActive?: boolean;
+  /** True only while real TTS audio is playing. */
+  voiceSpeaking?: boolean;
   disabled?: boolean;
 };
 
 export default function ChatInput({
   onSend,
   onVoiceToggle,
+  onStopVoiceTts,
   onUploadFiles,
   onRemoveAttachment,
   pendingAttachments = [],
   voiceRecording = false,
   voiceBusy = false,
+  voiceTtsActive = false,
+  voiceSpeaking = false,
   disabled = false,
 }: Props) {
   const [value, setValue] = useState("");
@@ -97,10 +106,25 @@ export default function ChatInput({
     }
   };
 
-  const handleMicClick = async () => {
-    if (!onVoiceToggle || voiceBusy || sending) return;
+  const handleVoiceButtonClick = async () => {
+    if (sending) return;
+    // Real TTS audio (or upcoming clips while still enabled) → mute only.
+    if (voiceBusy && voiceTtsActive) {
+      onStopVoiceTts?.();
+      return;
+    }
+    if (voiceBusy || !onVoiceToggle) return;
     await onVoiceToggle();
   };
+
+  // Dots only while real sound plays; generating uses a different in-mic animation.
+  const voiceMode: "idle" | "listening" | "generating" | "speaking" = voiceRecording
+    ? "listening"
+    : voiceBusy && voiceSpeaking
+      ? "speaking"
+      : voiceBusy
+        ? "generating"
+        : "idle";
 
   const handleFilePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
@@ -142,7 +166,6 @@ export default function ChatInput({
     !inputLocked &&
     !voiceRecording &&
     !attachmentsProcessing;
-  const micActive = voiceRecording;
   const showMic = Boolean(onVoiceToggle);
   const showAttach = Boolean(onUploadFiles);
 
@@ -221,25 +244,39 @@ export default function ChatInput({
         {showMic ? (
           <button
             type="button"
-            className={`mic-btn ${micActive ? "mic-btn-active" : ""} ${voiceBusy ? "mic-btn-busy" : ""}`}
-            onClick={handleMicClick}
-            disabled={voiceBusy || sending}
+            className={`mic-btn mic-btn-${voiceMode}`}
+            onClick={handleVoiceButtonClick}
+            disabled={sending || (voiceMode === "generating" && !voiceTtsActive)}
             aria-label={
-              voiceBusy
-                ? "Processing voice"
-                : micActive
-                  ? "Stop recording and send"
-                  : "Start voice message"
+              voiceMode === "speaking"
+                ? "Stop speaking"
+                : voiceMode === "generating" && voiceTtsActive
+                  ? "Stop upcoming voice"
+                  : voiceMode === "generating"
+                    ? "Iris is writing a reply"
+                    : voiceMode === "listening"
+                      ? "Stop recording and send"
+                      : "Start voice message"
             }
             title={
-              voiceBusy
-                ? "Processing…"
-                : micActive
-                  ? "Tap to send"
-                  : "Voice message"
+              voiceMode === "speaking"
+                ? "Stop voice — text keeps updating"
+                : voiceMode === "generating" && voiceTtsActive
+                  ? "Writing… tap to mute voice when it starts"
+                  : voiceMode === "generating"
+                    ? "Writing reply…"
+                    : voiceMode === "listening"
+                      ? "Listening — pause 2.5s or tap to send"
+                      : "Voice message"
             }
           >
-            {voiceBusy ? <SpinnerIcon /> : <MicIcon active={micActive} />}
+            {voiceMode === "speaking" ? (
+              <TtsDotGrid />
+            ) : voiceMode === "generating" ? (
+              <GeneratingBars />
+            ) : (
+              <MicIcon active={voiceMode === "listening"} />
+            )}
           </button>
         ) : null}
 
@@ -247,15 +284,17 @@ export default function ChatInput({
           ref={textareaRef}
           className="chat-textarea"
           placeholder={
-            micActive
-              ? "Listening… tap mic when done"
-              : voiceBusy
-                ? "Iris is responding…"
-                : attachmentsProcessing
-                  ? "Wait until your file is ready…"
-                  : pendingAttachments.length
-                    ? "Ask about your file… use @filename to mention"
-                    : "Message Iris…"
+            voiceMode === "listening"
+              ? "Listening… pause 2.5s or tap mic when done"
+              : voiceMode === "speaking"
+                ? "Iris is speaking… tap the dots to stop voice"
+                : voiceMode === "generating"
+                  ? "Iris is writing… voice starts when audio is ready"
+                  : attachmentsProcessing
+                    ? "Wait until your file is ready…"
+                    : pendingAttachments.length
+                      ? "Ask about your file… use @filename to mention"
+                      : "Message Iris…"
           }
           value={value}
           rows={1}
@@ -284,8 +323,12 @@ export default function ChatInput({
         </button>
       </div>
       <p className="input-hint">
-        {micActive ? (
-          <>Tap <kbd>mic</kbd> again to send your voice message</>
+        {voiceMode === "listening" ? (
+          <>Speak, then pause <kbd>2.5s</kbd> — or tap <kbd>mic</kbd> to send</>
+        ) : voiceMode === "speaking" ? (
+          <>Tap the <kbd>dots</kbd> to stop voice — text keeps streaming</>
+        ) : voiceMode === "generating" ? (
+          <>Iris is writing your reply…</>
         ) : attachmentsProcessing ? (
           <>Wait for the file to finish processing before sending</>
         ) : (
@@ -311,11 +354,48 @@ function PaperclipIcon() {
 
 function MicIcon({ active }: { active: boolean }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={active ? "mic-icon-active" : undefined}
+    >
       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
       <line x1="12" y1="19" x2="12" y2="22" />
     </svg>
+  );
+}
+
+/** Distinct from TTS dots — pulsing bars while text/tokens stream. */
+function GeneratingBars() {
+  return (
+    <span className="gen-bars" aria-hidden>
+      <span className="gen-bar" />
+      <span className="gen-bar" />
+      <span className="gen-bar" />
+      <span className="gen-bar" />
+    </span>
+  );
+}
+
+function TtsDotGrid() {
+  return (
+    <span className="tts-dot-grid" aria-hidden>
+      {Array.from({ length: 25 }, (_, i) => (
+        <span
+          key={i}
+          className="tts-dot"
+          style={{ animationDelay: `${((i * 37) % 90) / 100}s` }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -460,6 +540,8 @@ const inputStyles = `
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
     flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
     transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.15s, box-shadow 0.2s;
   }
   .mic-btn:hover:not(:disabled) {
@@ -467,24 +549,121 @@ const inputStyles = `
     color: #c4b5fd;
     border-color: rgba(124,106,255,0.35);
   }
-  .mic-btn-active {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(239, 68, 68, 0.45);
-    color: #f87171;
-    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
-    animation: mic-pulse 1.2s ease-in-out infinite;
-  }
-  .mic-btn-busy {
-    cursor: wait;
-    opacity: 0.7;
-  }
+  .mic-btn:active:not(:disabled) { transform: scale(0.96); }
   .mic-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
+    cursor: wait;
+    opacity: 0.85;
   }
-  @keyframes mic-pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
+
+  /* Listening — purple (not red) */
+  .mic-btn-listening {
+    background: rgba(124, 106, 255, 0.18);
+    border-color: rgba(124, 106, 255, 0.55);
+    color: #c4b5fd;
+    box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.16);
+    animation: mic-listen-pulse 1.4s ease-in-out infinite;
+  }
+  .mic-btn-listening:hover:not(:disabled) {
+    background: rgba(124, 106, 255, 0.28);
+    color: #ddd6fe;
+    border-color: rgba(124, 106, 255, 0.7);
+  }
+
+  /* Generating — bars while text streams (before/between real audio) */
+  .mic-btn-generating {
+    background: rgba(124, 106, 255, 0.1);
+    border-color: rgba(124, 106, 255, 0.3);
+    color: #c4b5fd;
+    cursor: wait;
+  }
+  .mic-btn-generating:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* TTS speaking — dot matrix; matches input bar (no solid black tile) */
+  .mic-btn-speaking {
+    background: transparent;
+    border-color: rgba(124, 106, 255, 0.35);
+    box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.1);
+  }
+  .mic-btn-speaking:hover:not(:disabled) {
+    background: rgba(124, 106, 255, 0.1);
+    border-color: rgba(124, 106, 255, 0.5);
+  }
+
+  .gen-bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2.5px;
+    width: 18px;
+    height: 16px;
+  }
+  .gen-bar {
+    width: 2.5px;
+    height: 40%;
+    border-radius: 2px;
+    background: #a78bfa;
+    animation: gen-bar-pulse 0.85s ease-in-out infinite;
+  }
+  .gen-bar:nth-child(1) { animation-delay: 0s; }
+  .gen-bar:nth-child(2) { animation-delay: 0.12s; }
+  .gen-bar:nth-child(3) { animation-delay: 0.24s; }
+  .gen-bar:nth-child(4) { animation-delay: 0.36s; }
+  @keyframes gen-bar-pulse {
+    0%, 100% { height: 30%; opacity: 0.55; }
+    50% { height: 100%; opacity: 1; }
+  }
+
+  .tts-dot-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2px;
+    width: 20px;
+    height: 20px;
+  }
+  .tts-dot {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    animation: tts-dot-glow-dark 1.15s ease-in-out infinite;
+  }
+  @keyframes tts-dot-glow-dark {
+    0%, 100% {
+      background: rgba(255, 255, 255, 0.16);
+      box-shadow: none;
+      transform: scale(0.85);
+    }
+    45%, 55% {
+      background: #ffffff;
+      box-shadow: 0 0 5px rgba(255, 255, 255, 0.75);
+      transform: scale(1);
+    }
+  }
+  @keyframes tts-dot-glow-light {
+    0%, 100% {
+      background: rgba(124, 106, 255, 0.22);
+      box-shadow: none;
+      transform: scale(0.85);
+    }
+    45%, 55% {
+      background: #7c6aff;
+      box-shadow: 0 0 5px rgba(124, 106, 255, 0.55);
+      transform: scale(1);
+    }
+  }
+  @keyframes mic-listen-pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.14); }
+    50% { transform: scale(1.04); box-shadow: 0 0 0 5px rgba(124, 106, 255, 0.22); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mic-btn-listening,
+    .gen-bar,
+    .tts-dot { animation: none !important; }
+    .gen-bar { height: 70%; opacity: 0.9; }
+    .tts-dot:nth-child(odd) { background: rgba(255, 255, 255, 0.85); }
+    [data-theme="light"] .tts-dot:nth-child(odd) { background: #7c6aff; }
   }
 
   .chat-textarea {
@@ -561,6 +740,7 @@ const inputStyles = `
     .input-hint { display: none; }
     .chat-input-wrap { padding: 10px 10px 10px 14px; border-radius: 14px; }
     .send-btn, .mic-btn, .attach-btn { width: 36px; height: 36px; border-radius: 10px; }
+    .tts-dot-grid { width: 18px; height: 18px; gap: 1.5px; }
   }
 
   [data-theme="light"] .chat-input-wrap {
@@ -579,6 +759,31 @@ const inputStyles = `
     background: rgba(0,0,0,0.03);
     border-color: rgba(0,0,0,0.08);
     color: #66667a;
+  }
+  [data-theme="light"] .mic-btn-listening {
+    background: rgba(124, 106, 255, 0.12);
+    border-color: rgba(124, 106, 255, 0.45);
+    color: #6d28d9;
+  }
+  [data-theme="light"] .mic-btn-generating {
+    background: rgba(124, 106, 255, 0.08);
+    border-color: rgba(124, 106, 255, 0.28);
+  }
+  [data-theme="light"] .gen-bar {
+    background: #7c6aff;
+  }
+  [data-theme="light"] .mic-btn-speaking {
+    background: transparent;
+    border-color: rgba(124, 106, 255, 0.4);
+    box-shadow: 0 0 0 3px rgba(124, 106, 255, 0.1);
+  }
+  [data-theme="light"] .mic-btn-speaking:hover:not(:disabled) {
+    background: rgba(124, 106, 255, 0.08);
+    border-color: rgba(124, 106, 255, 0.55);
+  }
+  [data-theme="light"] .tts-dot {
+    background: rgba(124, 106, 255, 0.22);
+    animation-name: tts-dot-glow-light;
   }
   [data-theme="light"] .send-btn {
     background: rgba(0,0,0,0.03);

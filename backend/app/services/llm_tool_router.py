@@ -239,7 +239,8 @@ def _history_snippet(history: Optional[List[dict]], *, max_turns: int = 4) -> li
         if isinstance(m, dict)
         and m.get("role") in ("user", "assistant")
         and str(m.get("content") or "").strip()
-        and not str(m.get("content") or "").startswith("TOOL_RESULT")
+        and not str(m.get("content") or "").startswith("LIVE_CONTEXT")
+        and not str(m.get("content") or "").startswith("TOOL_RESULT")  # legacy label
         and not str(m.get("content") or "").startswith("USER_FACTS")
         and not str(m.get("content") or "").startswith("The user's request needs clarification")
     ]

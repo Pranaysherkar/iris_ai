@@ -88,10 +88,12 @@ async def build_chat_model_messages(
         except Exception as exc:
             logger.warning("rag_retrieve_skipped: %s", exc)
 
-    trimmed = trim_messages_to_estimated_token_budget(
-        combined,
-        settings.CHAT_MAX_CONTEXT_TOKENS_ESTIMATE,
+    context_budget = (
+        settings.VOICE_MAX_CONTEXT_TOKENS_ESTIMATE
+        if voice_mode
+        else settings.CHAT_MAX_CONTEXT_TOKENS_ESTIMATE
     )
+    trimmed = trim_messages_to_estimated_token_budget(combined, context_budget)
 
     pending_meta = None
     if conversation_id and user_id:
@@ -186,12 +188,8 @@ async def build_chat_model_messages(
         tool_result=tool_result,
         user_requested_place=str(requested_place) if requested_place else None,
     )
-    # Re-trim after tool inject so web_search/etc. cannot blow past Groq TPM.
-    # Leading system messages (persona + TOOL_RESULT) are preserved.
-    return trim_messages_to_estimated_token_budget(
-        with_tools,
-        settings.CHAT_MAX_CONTEXT_TOKENS_ESTIMATE,
-    )
+    # Re-trim after tool inject (history + shrink oversized tool JSON for Groq TPM).
+    return trim_messages_to_estimated_token_budget(with_tools, context_budget)
 
 
 async def resolve_tool_pipeline(

@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from app.core.config import settings
 from app.core.tool_schemas import ToolResult
 from app.tools.base import failure_result, success_result
 from app.tools.ollama_client import OllamaApiError, post_json
@@ -50,18 +51,14 @@ async def run(args: dict[str, Any]) -> ToolResult:
             error=f"Page returned no content: {url}",
         )
 
-    links = data.get("links") or []
-    if not isinstance(links, list):
-        links = []
-
+    max_chars = max(500, int(settings.TOOL_WEB_FETCH_MAX_CHARS))
     return success_result(
         tool_name=TOOL_NAME,
         source=SOURCE,
         data={
             "url": url,
             "title": str(data.get("title") or "").strip(),
-            "content": content[:12_000],
-            "content_truncated": len(content) > 12_000,
-            "links": [str(link) for link in links[:20]],
+            "content": content[:max_chars],
+            "content_truncated": len(content) > max_chars,
         },
     )
