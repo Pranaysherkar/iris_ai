@@ -1,0 +1,74 @@
+# Keep Qdrant Cloud Free-tier cluster active (prevent ~7-day inactivity suspension).
+#
+# Free clusters auto-suspend after about 1 week without API activity, and may be
+# deleted a few weeks later if not reactivated. One lightweight request per day
+# resets the inactivity timer.
+# Docs: https://qdrant.tech/documentation/cloud/create-cluster/
+#
+# Required GitHub repository secrets (Settings → Secrets and variables → Actions):
+#   QDRANT_URL      — Cluster URL, e.g. https://xxxx.cloud.qdrant.io (no trailing slash)
+#   QDRANT_API_KEY  — Qdrant Cloud API key for that cluster
+#
+# Do NOT commit keys to this file. Use GitHub Secrets only.
+#
+# Manual test: Actions tab → "Keep Qdrant alive" → Run workflow
+
+name: Keep Qdrant alive
+
+on:
+  schedule:
+    # Daily at 18:35 UTC (~ midnight IST), 5 min after Supabase keep-alive.
+    - cron: "35 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-qdrant-alive
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    name: Qdrant heartbeat
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate secrets are configured
+        env:
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: |
+          if [ -z "$QDRANT_URL" ]; then
+            echo "::error::Missing repository secret QDRANT_URL"
+            exit 1
+          fi
+          if [ -z "$QDRANT_API_KEY" ]; then
+            echo "::error::Missing repository secret QDRANT_API_KEY"
+            exit 1
+          fi
+          echo "Secrets present."
+
+      - name: Ping Qdrant collections API
+        env:
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: |
+          set -euo pipefail
+          BASE="${QDRANT_URL%/}"
+
+          # Lightweight read — lists collections; resets free-tier inactivity timer.
+          HTTP_CODE="$(curl -sS -o /tmp/qdrant-ping-body.txt -w "%{http_code}" \
+            -H "api-key: ${QDRANT_API_KEY}" \
+            -H "Accept: application/json" \
+            "${BASE}/collections")"
+
+          echo "Qdrant response: HTTP ${HTTP_CODE}"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Qdrant ping failed (HTTP ${HTTP_CODE})"
+            head -c 500 /tmp/qdrant-ping-body.txt || true
+            exit 1
+          fi
+
+          echo "Heartbeat OK — cluster received API activity."
