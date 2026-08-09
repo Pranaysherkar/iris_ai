@@ -23,6 +23,17 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(d.tool_name, "web_fetch")
         self.assertEqual(d.tool_args.get("url"), "https://example.com/article")
 
+    def test_intent_ai_trends_uses_web_search(self):
+        d = match_intent("Summarize the latest AI trends")
+        self.assertEqual(d.intent, Intent.WEB_FACTS)
+        self.assertEqual(d.tool_name, "web_search")
+        self.assertTrue(d.needs_tool)
+
+    def test_intent_search_web_ai_trends(self):
+        d = match_intent("Search the web and summarize the latest AI trends")
+        self.assertEqual(d.tool_name, "web_search")
+        self.assertTrue(d.needs_tool)
+
     def test_web_search_mocked(self):
         payload = {
             "results": [

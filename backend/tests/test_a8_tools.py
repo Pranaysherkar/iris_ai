@@ -86,6 +86,25 @@ class A8ToolTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_news_rss_topic_miss_falls_back_to_general(self):
+        rss_xml = """<?xml version="1.0"?>
+        <rss><channel>
+          <item><title>World Cup Final</title><link>https://example.com/w</link><description>Sports</description></item>
+        </channel></rss>"""
+
+        async def _run():
+            with patch(
+                "app.tools.news_rss.fetch_text",
+                new_callable=AsyncMock,
+                return_value=rss_xml,
+            ):
+                result = await news_rss.run({"topic": "AI"})
+                self.assertTrue(result.success)
+                self.assertTrue(result.data.get("topic_filter_relaxed"))
+                self.assertGreaterEqual(result.data["headline_count"], 1)
+
+        asyncio.run(_run())
+
     def test_user_memory_mocked(self):
         mock_client = MagicMock()
         mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(

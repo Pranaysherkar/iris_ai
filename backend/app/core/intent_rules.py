@@ -71,6 +71,8 @@ _WEB_SEARCH_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\blook\s+up\s+online\b", re.I),
     re.compile(r"\bfind\s+(out\s+)?(online|on the web)\b", re.I),
     re.compile(r"\b(latest|recent|current)\s+.*\b(about|on)\b", re.I),
+    re.compile(r"\b(latest|recent|current)\s+.*\btrends?\b", re.I),
+    re.compile(r"\bsummarize\s+(the\s+)?(latest|recent|current)\b", re.I),
     re.compile(r"\bwho\s+is\s+", re.I),
     re.compile(r"\bwhat\s+happened\s+", re.I),
 )
@@ -246,8 +248,9 @@ def match_intent(user_message: str, history: Optional[List[dict]] = None) -> Rou
         _match_exchange,
         _match_web_fetch,
         _match_wikipedia,
-        _match_news,
+        # Trends / "summarize latest …" before news so RSS is not chosen first.
         _match_web_search,
+        _match_news,
     )
     for matcher in matchers:
         decision = matcher(text)

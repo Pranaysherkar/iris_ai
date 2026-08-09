@@ -68,8 +68,10 @@ _TOOL_CATALOG: dict[str, ToolSpec] = {
         intent=Intent.CURRENT_NEWS,
         description=(
             "Fetch LIVE/recent news headlines from configured RSS feeds (BBC, NYT, etc.). "
-            "Use for recent news, current events, today's headlines, breaking news, "
-            "'what's happening in the world', or topic-filtered live headlines. "
+            "Use for today's headlines, breaking news, 'what's happening in the world', "
+            "or world/home-page style news. "
+            "Do NOT use for industry/tech trends, market research, or 'summarize latest AI trends' "
+            "(use web_search for those). "
             "Do NOT use for timeless encyclopedia facts (use wikipedia instead)."
         ),
         parameters={
@@ -162,8 +164,10 @@ _TOOL_CATALOG: dict[str, ToolSpec] = {
         name="web_search",
         intent=Intent.WEB_FACTS,
         description=(
-            "Search the live web for facts not covered by weather, news_rss, wikipedia, or FX. "
-            "Use sparingly for broad real-time questions when other tools do not fit."
+            "Search the live web for current facts, industry/tech trends, research summaries, "
+            "and questions like 'latest AI trends', 'summarize current developments in X', "
+            "or any live topic not covered by weather, news_rss headlines, wikipedia, or FX. "
+            "Prefer this over news_rss when the user asks for trends, analysis, or topic research."
         ),
         parameters={
             "type": "object",
@@ -238,13 +242,14 @@ Rules:
 1. If the question can be answered from general knowledge alone (coding help, explanations, opinions, creative writing), do NOT call any tool.
 2. If the user needs live/current/external data, call EXACTLY ONE tool that best matches.
 3. Choose tools by description carefully:
-   - recent/current/breaking news or headlines → news_rss (NOT wikipedia)
+   - today's headlines / breaking news / "what's happening in the world" → news_rss
+   - industry/tech trends, "latest AI trends", summarize current developments, market/research topics → web_search (NOT news_rss)
    - weather/temperature in a city → weather (city required)
    - currency conversion → exchange_rates
    - current clock/date → datetime
    - encyclopedia / "what is" static facts → wikipedia
    - user's own name/profile/past chats → user_memory
-   - other live web facts → web_search (only if enabled and no better tool)
+   - other live web facts → web_search (when enabled)
 4. Fill arguments correctly. Never invent cities or URLs.
 5. If weather is needed but no city was given, call weather with city as an empty string.
 6. For weather, pass a single clear place name (e.g. "Ghansoli" or "Navi Mumbai"), not a long address.

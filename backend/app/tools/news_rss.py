@@ -80,39 +80,42 @@ async def run(args: dict[str, Any]) -> ToolResult:
     headlines: list[dict[str, str]] = []
     errors: list[str] = []
 
+    def _normalize_item(item: dict[str, str]) -> dict[str, str]:
+        desc = str(item.get("description") or "").strip()
+        if len(desc) > desc_chars:
+            desc = desc[:desc_chars].rstrip() + "…"
+        return {
+            "title": str(item.get("title") or "").strip(),
+            "url": str(item.get("url") or "").strip(),
+            "description": desc,
+            "published": str(item.get("published") or "").strip(),
+        }
+
+    all_items: list[dict[str, str]] = []
     for feed_url in feeds:
         try:
             xml_text = await fetch_text(feed_url)
             items = _parse_rss_items(xml_text, limit=per_feed)
             for item in items:
+                normalized = _normalize_item(item)
+                all_items.append(normalized)
                 if topic:
-                    blob = f"{item.get('title', '')} {item.get('description', '')}".lower()
+                    blob = f"{normalized.get('title', '')} {normalized.get('description', '')}".lower()
                     if topic not in blob:
                         continue
-                desc = str(item.get("description") or "").strip()
-                if len(desc) > desc_chars:
-                    desc = desc[:desc_chars].rstrip() + "…"
-                headlines.append(
-                    {
-                        "title": str(item.get("title") or "").strip(),
-                        "url": str(item.get("url") or "").strip(),
-                        "description": desc,
-                        "published": str(item.get("published") or "").strip(),
-                    }
-                )
+                headlines.append(normalized)
         except (httpx.HTTPError, ET.ParseError) as exc:
             errors.append(f"{feed_url}: {exc}")
             continue
 
+    topic_miss = bool(topic) and not headlines and bool(all_items)
+    if topic_miss:
+        # Topic filter found nothing (e.g. "AI" not in BBC/NYT titles) — still return
+        # general headlines so the model can answer instead of inventing a city-filter failure.
+        headlines = list(all_items)
+
     if not headlines:
-        if topic:
-            msg = (
-                f"No headlines matched the local/city filter '{topic}'. "
-                "Current feeds are general world news, not city-specific. "
-                "Offer world headlines or another topic."
-            )
-        else:
-            msg = "No headlines available from the configured news feeds right now."
+        msg = "No headlines available from the configured news feeds right now."
         if errors:
             msg += f" (feed issues: {'; '.join(errors[:2])})"
         return failure_result(tool_name=TOOL_NAME, source=SOURCE, error=msg)
@@ -123,7 +126,18 @@ async def run(args: dict[str, Any]) -> ToolResult:
         source=SOURCE,
         data={
             "topic_filter": topic or None,
+            "topic_filter_relaxed": topic_miss,
             "headline_count": len(kept),
             "headlines": kept,
+            **(
+                {
+                    "note": (
+                        f"No headlines matched '{topic}' in the configured feeds; "
+                        "showing top general headlines instead."
+                    )
+                }
+                if topic_miss
+                else {}
+            ),
         },
     )
