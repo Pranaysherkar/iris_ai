@@ -14,7 +14,9 @@ import { streamChatCompletion, streamChatEdit } from "@/lib/api/chat";
 import {
   deleteAttachment,
   getAttachment,
+  listAttachments,
   uploadAttachment,
+  type AttachmentDto,
 } from "@/lib/api/attachments";
 import type { PendingAttachment } from "./ChatInput";
 import { streamSpeechChat } from "@/lib/api/speech";
@@ -22,6 +24,12 @@ import { AudioPlaybackQueue } from "@/lib/voice/audio-playback-queue";
 import { LiveSpeechRecognizer } from "@/lib/voice/live-speech-recognition";
 import { VoiceRecorder } from "@/lib/voice/voice-recorder";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { useToast } from "@/components/ui/ToastProvider";
+import {
+  friendlyChatNotice,
+  friendlyEditError,
+  friendlyUploadError,
+} from "@/lib/ui/friendly-messages";
 
 import Sidebar from "./Sidebar";
 import ChatArea from "./ChatArea";
@@ -75,27 +83,24 @@ function displayEditFailureMessage(raw: string): string {
     t.includes("sign in again") ||
     t.includes("please sign in")
   ) {
-    return detail;
+    return "You are not signed in. Please sign in again.";
   }
   if (t.includes("maximum") && t.includes("versions allowed")) {
     return "You've reached the limit of 3 versions for this message.";
   }
-  if (t.includes("active branch")) {
-    return `Edit failed: ${detail}`;
-  }
-  if (t.includes("only user messages can be edited")) {
-    return `Edit failed: ${detail}`;
-  }
-  if (t.includes("invalid message_id") || t.includes("invalid message id")) {
-    return "Edit failed: This message is still saving. Wait a moment, then try Edit again.";
+  if (t.includes("invalid message_id") || t.includes("invalid message id") || t.includes("still saving")) {
+    return "This message is still saving. Try Edit again in a moment.";
   }
   if (t.includes("message not found")) {
-    return "Edit failed: That message was not found. Refresh the chat and try again.";
+    return "That message wasn’t found. Refresh the chat and try again.";
   }
   if (t.includes("save a reply") || t.includes("before editing")) {
-    return detail.startsWith("Edit failed:") ? detail : `Edit failed: ${detail}`;
+    return "Send a reply first, then you can edit.";
   }
-  return "Edit failed: Couldn’t apply this edit. Please try again, or refresh the chat.";
+  if (t.includes("only user messages can be edited") || t.includes("active branch")) {
+    return "Couldn’t edit this message. Please try again.";
+  }
+  return "Couldn’t edit this message. Please try again.";
 }
 
 export type MessageAttachment = {
@@ -126,6 +131,17 @@ export type Message = {
   branchSiblings?: BranchSibling[];
 };
 
+function historyAttachmentToMessageAttachment(
+  a: { id: string; file_name?: string | null; mime_type?: string | null },
+): MessageAttachment {
+  return {
+    id: a.id,
+    fileName: a.file_name || "file",
+    mimeType: a.mime_type,
+    kindLabel: attachmentKindLabel(a.file_name, a.mime_type),
+  };
+}
+
 function mapHistoryMessages(
   rows: HistoryMessageDto[],
   previousMessages?: Message[],
@@ -135,21 +151,45 @@ function mapHistoryMessages(
     .map((m) => {
       const content = m.content;
       let inputMode: Message["inputMode"] | undefined;
-      if (m.role === "user" && previousMessages?.length) {
-        const prevVoice = previousMessages.find(
-          (p) =>
-            p.role === "user" &&
-            p.inputMode === "voice" &&
-            p.content.trim() === content.trim(),
-        );
-        if (prevVoice) inputMode = "voice";
+      let attachments: MessageAttachment[] | undefined;
+
+      if (m.role === "user") {
+        // Prefer attachments embedded in history (authoritative after reopen).
+        if (m.attachments?.length) {
+          attachments = m.attachments.map(historyAttachmentToMessageAttachment);
+        } else if (previousMessages?.length) {
+          // Keep optimistic chips if history has not linked them yet.
+          const prevWithFiles =
+            previousMessages.find((p) => p.id === m.id && p.attachments?.length) ??
+            previousMessages.find(
+              (p) =>
+                p.role === "user" &&
+                !!p.attachments?.length &&
+                p.content.trim() === content.trim(),
+            );
+          if (prevWithFiles?.attachments?.length) {
+            attachments = prevWithFiles.attachments;
+          }
+        }
+
+        if (previousMessages?.length) {
+          const prevVoice = previousMessages.find(
+            (p) =>
+              p.role === "user" &&
+              p.inputMode === "voice" &&
+              p.content.trim() === content.trim(),
+          );
+          if (prevVoice) inputMode = "voice";
+        }
       }
+
       return {
         id: m.id,
         role: m.role as "user" | "assistant",
         content,
         timestamp: m.created_at ? new Date(m.created_at) : new Date(),
         inputMode,
+        attachments,
         branchVersion: m.branch_version ?? 1,
         branchTotal: m.branch_total ?? 1,
         branchSiblings: (m.branch_siblings ?? []).map((s) => ({
@@ -158,6 +198,93 @@ function mapHistoryMessages(
         })),
       };
     });
+}
+
+function attachmentDtoToMessageAttachment(a: AttachmentDto): MessageAttachment {
+  return historyAttachmentToMessageAttachment(a);
+}
+
+/** Overlay list-API files onto user bubbles (fallback when history has none). */
+function mergeConversationAttachments(
+  messages: Message[],
+  rows: AttachmentDto[],
+): Message[] {
+  const activeIds = new Set(messages.map((m) => m.id));
+  const byMessageId = new Map<string, MessageAttachment[]>();
+  const orphans: AttachmentDto[] = [];
+
+  for (const row of rows) {
+    if (row.message_id && activeIds.has(row.message_id)) {
+      const list = byMessageId.get(row.message_id) ?? [];
+      list.push(attachmentDtoToMessageAttachment(row));
+      byMessageId.set(row.message_id, list);
+    } else {
+      // null message_id, or linked to an inactive edit sibling
+      orphans.push(row);
+    }
+  }
+
+  let next = messages;
+  if (byMessageId.size) {
+    next = messages.map((m) => {
+      if (m.role !== "user") return m;
+      const linked = byMessageId.get(m.id);
+      if (!linked?.length) return m;
+      // History attachments win when already present; otherwise fill from list.
+      if (m.attachments?.length) {
+        const seen = new Set(m.attachments.map((a) => a.id));
+        const extra = linked.filter((a) => !seen.has(a.id));
+        return extra.length ? { ...m, attachments: [...m.attachments, ...extra] } : m;
+      }
+      return { ...m, attachments: linked };
+    });
+  }
+
+  if (!orphans.length) return next;
+  const userMsgs = next
+    .filter((m) => m.role === "user")
+    .slice()
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  if (!userMsgs.length) return next;
+
+  const orphanByMsg = new Map<string, MessageAttachment[]>();
+  for (const row of orphans) {
+    const t = row.created_at ? new Date(row.created_at).getTime() : 0;
+    const target =
+      userMsgs.find((m) => m.timestamp.getTime() >= t) ?? userMsgs[userMsgs.length - 1];
+    const list = orphanByMsg.get(target.id) ?? [];
+    list.push(attachmentDtoToMessageAttachment(row));
+    orphanByMsg.set(target.id, list);
+  }
+
+  return next.map((m) => {
+    const extra = orphanByMsg.get(m.id);
+    if (!extra?.length) return m;
+    const existing = m.attachments ?? [];
+    const seen = new Set(existing.map((a) => a.id));
+    return {
+      ...m,
+      attachments: [...existing, ...extra.filter((a) => !seen.has(a.id))],
+    };
+  });
+}
+
+async function messagesFromHistory(
+  accessToken: string,
+  conversationId: string,
+  rows: HistoryMessageDto[],
+  previousMessages?: Message[],
+): Promise<Message[]> {
+  const mapped = mapHistoryMessages(rows, previousMessages);
+  const historyHasFiles = rows.some(
+    (r) => r.role === "user" && (r.attachments?.length ?? 0) > 0,
+  );
+  if (historyHasFiles) return mapped;
+
+  // Fallback when history returned empty chips (legacy API / enrich failure).
+  const atts = await listAttachments(accessToken, conversationId);
+  if (!atts.data?.length) return mapped;
+  return mergeConversationAttachments(mapped, atts.data);
 }
 
 /** Local UI id + optional Supabase conversation UUID returned by the API (`X-Conversation-Id`). */
@@ -280,6 +407,7 @@ function mergeLoadedConversations(prev: Chat[], rows: ConversationListItemDto[])
 }
 
 export default function ChatLayout({ user }: Props) {
+  const { showToast } = useToast();
   // On mobile, sidebar is closed by default; on desktop it's open
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chats, setChats] = useState<Chat[]>(() => [createDraftChat()]);
@@ -287,12 +415,14 @@ export default function ChatLayout({ user }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [historyRetryTick, setHistoryRetryTick] = useState(0);
 
-  // Auto-dismiss banners (e.g. version-limit warning) after 5s.
+  // Route chat notices through global toasts (auto-dismiss 5s).
   useEffect(() => {
     if (!actionError) return;
-    const timer = window.setTimeout(() => setActionError(null), 5000);
-    return () => window.clearTimeout(timer);
-  }, [actionError]);
+    const softened = friendlyEditError(friendlyUploadError(actionError));
+    const { message, kind } = friendlyChatNotice(softened);
+    showToast(message, kind);
+    setActionError(null);
+  }, [actionError, showToast]);
 
   const chatsRef = useRef(chats);
   /** Supabase conversation UUID per local chat id (synced before fetch — avoids race on 2nd message). */
@@ -411,10 +541,18 @@ export default function ChatLayout({ user }: Props) {
         return;
       }
 
+      const previous = chatsRef.current.find((c) => c.id === chat.id)?.messages;
+      const mapped = await messagesFromHistory(
+        session.access_token,
+        chat.backendConversationId!,
+        res.messages,
+        previous,
+      );
+      if (ac.signal.aborted) return;
+
       setChats((prev) =>
         prev.map((c) => {
           if (c.id !== chat.id) return c;
-          const mapped = mapHistoryMessages(res.messages, c.messages);
           const firstUser = mapped.find((m) => m.role === "user");
           const titleFromFirst =
             firstUser && isPlaceholderTitle(c.title)
@@ -644,12 +782,19 @@ export default function ChatLayout({ user }: Props) {
     if (resolvedConversationId) {
       const hist = await fetchConversationHistory(session.access_token, resolvedConversationId);
       if (hist.ok) {
+        const previous = chatsRef.current.find((c) => c.id === requestChatId)?.messages;
+        const mapped = await messagesFromHistory(
+          session.access_token,
+          resolvedConversationId,
+          hist.messages,
+          previous,
+        );
         setChats((prev) =>
           prev.map((c) =>
             c.id === requestChatId
               ? {
                   ...c,
-                  messages: mapHistoryMessages(hist.messages, c.messages),
+                  messages: mapped,
                   historyLoaded: true,
                 }
               : c,
@@ -692,7 +837,7 @@ export default function ChatLayout({ user }: Props) {
 
     if (!isServerMessageId(messageId)) {
       setActionError(
-        "Edit failed: This message is still saving. Wait for the reply to finish, then try Edit again.",
+        "This message is still saving. Try Edit again in a moment.",
       );
       return;
     }
@@ -708,7 +853,7 @@ export default function ChatLayout({ user }: Props) {
     const backendConversationId =
       backendIdByChatRef.current.get(requestChatId) ?? chat?.backendConversationId ?? undefined;
     if (!backendConversationId) {
-      setActionError("Edit failed: Save a reply in this chat before editing a message.");
+      setActionError("Send a reply first, then you can edit.");
       return;
     }
 
@@ -793,12 +938,19 @@ export default function ChatLayout({ user }: Props) {
 
     const hist = await fetchConversationHistory(session.access_token, backendConversationId);
     if (hist.ok) {
+      const previous = chatsRef.current.find((c) => c.id === requestChatId)?.messages;
+      const mapped = await messagesFromHistory(
+        session.access_token,
+        backendConversationId,
+        hist.messages,
+        previous,
+      );
       setChats((prev) =>
         prev.map((c) =>
           c.id === requestChatId
             ? {
                 ...c,
-                messages: mapHistoryMessages(hist.messages, c.messages),
+                messages: mapped,
                 historyLoaded: true,
               }
             : c,
@@ -841,17 +993,22 @@ export default function ChatLayout({ user }: Props) {
       targetMessageId,
     );
     if (!res.ok) {
-      setActionError(
-        `Couldn’t switch version: ${extractApiDetail(res.detail) || "Please try again."}`,
-      );
+      setActionError("Couldn’t switch versions. Please try again.");
       return;
     }
+    const previous = chatsRef.current.find((c) => c.id === requestChatId)?.messages;
+    const mapped = await messagesFromHistory(
+      session.access_token,
+      backendConversationId,
+      res.messages,
+      previous,
+    );
     setChats((prev) =>
       prev.map((c) =>
         c.id === requestChatId
           ? {
               ...c,
-              messages: mapHistoryMessages(res.messages, c.messages),
+              messages: mapped,
               historyLoaded: true,
             }
           : c,
@@ -914,7 +1071,7 @@ export default function ChatLayout({ user }: Props) {
         backendConversationId,
       );
       if (error || !data) {
-        const msg = error || "Upload failed";
+        const msg = friendlyUploadError(error || "Upload failed");
         setPendingAttachments((prev) =>
           prev.map((a) =>
             a.id === tempId
@@ -1365,12 +1522,18 @@ export default function ChatLayout({ user }: Props) {
         chatsRef.current.find((c) => c.id === liveChatId)?.messages ?? [];
       const hist = await fetchConversationHistory(session.access_token, resolvedConversationId);
       if (hist.ok) {
+        const mapped = await messagesFromHistory(
+          session.access_token,
+          resolvedConversationId,
+          hist.messages,
+          prevMessages,
+        );
         setChats((prev) =>
           prev.map((c) =>
             c.id === liveChatId
               ? {
                   ...c,
-                  messages: mapHistoryMessages(hist.messages, prevMessages),
+                  messages: mapped,
                   historyLoaded: true,
                 }
               : c,
@@ -1459,22 +1622,6 @@ export default function ChatLayout({ user }: Props) {
 
   return (
     <div className="chat-root">
-      {actionError ? (
-        <div
-          className={
-            actionError.toLowerCase().includes("reached the limit")
-              ? "chat-banner-warning"
-              : "chat-banner-error"
-          }
-          role="status"
-        >
-          <span>{actionError}</span>
-          <button type="button" onClick={() => setActionError(null)} className="chat-banner-dismiss">
-            ✕
-          </button>
-        </div>
-      ) : null}
-
       {/* Mobile overlay backdrop */}
       {sidebarOpen && (
         <div

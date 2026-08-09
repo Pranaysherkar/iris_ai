@@ -1,15 +1,17 @@
 import { Suspense } from "react";
 
-import BackendWarmupGate from "@/components/warmup/BackendWarmupGate";
+import WakeBackendOnMount from "@/components/warmup/WakeBackendOnMount";
 import SignInClient from "./SignInClient";
 
 export default function SignInPage() {
   return (
-    <BackendWarmupGate>
+    <>
+      {/* Wake Render in background — do not block the form. */}
+      <WakeBackendOnMount />
       <Suspense fallback={<SignInFallback />}>
         <SignInClient />
       </Suspense>
-    </BackendWarmupGate>
+    </>
   );
 }
 

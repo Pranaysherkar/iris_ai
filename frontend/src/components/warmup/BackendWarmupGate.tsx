@@ -15,9 +15,10 @@ type BackendWarmupGateProps = {
 };
 
 /**
- * Ensures the API host is awake before rendering children.
+ * Blocking gate for post-auth surfaces (e.g. `/chat`).
+ * Auth pages should use WakeBackendOnMount instead so forms are not blocked.
  * Fast path: recent warm cache or quick health OK → children immediately.
- * Slow path: show warmup UI until `/health` succeeds (cold start).
+ * Slow path: show ServerWarmupScreen until `/health` succeeds (cold start).
  */
 export default function BackendWarmupGate({ children }: BackendWarmupGateProps) {
   const [state, setState] = useState<GateState>("checking");

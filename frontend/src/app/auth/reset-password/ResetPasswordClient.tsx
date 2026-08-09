@@ -6,12 +6,15 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 
+import { useToast } from "@/components/ui/ToastProvider";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { friendlyAuthError } from "@/lib/ui/friendly-messages";
 
 type Phase = "loading" | "ready" | "invalid";
 
 export default function ResetPasswordClient() {
   const router = useRouter();
+  const { showToast } = useToast();
   const recoveryRef = useRef(false);
   const [phase, setPhase] = useState<Phase>("loading");
   const [email, setEmail] = useState("");
@@ -19,7 +22,6 @@ export default function ResetPasswordClient() {
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -66,13 +68,12 @@ export default function ResetPasswordClient() {
 
   const handleSetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMessage(null);
     if (password.length < 8) {
-      setErrorMessage("Password must be at least 8 characters.");
+      showToast("Password must be at least 8 characters.", "error");
       return;
     }
     if (password !== confirm) {
-      setErrorMessage("Passwords do not match.");
+      showToast("Passwords do not match.", "error");
       return;
     }
     setSaving(true);
@@ -80,14 +81,17 @@ export default function ResetPasswordClient() {
       const supabase = createSupabaseBrowserClient();
       const { error } = await supabase.auth.updateUser({ password });
       if (error) {
-        setErrorMessage(error.message);
+        showToast(friendlyAuthError(error.message), "error");
         return;
       }
       await supabase.auth.signOut();
       router.replace("/auth/signin?password_reset=1");
       router.refresh();
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Could not update password");
+      showToast(
+        friendlyAuthError(err instanceof Error ? err.message : "Could not update password"),
+        "error",
+      );
     } finally {
       setSaving(false);
     }
@@ -192,12 +196,6 @@ export default function ResetPasswordClient() {
         </div>
 
         <form onSubmit={handleSetPassword} className="auth-form" autoComplete="off">
-          {errorMessage && (
-            <div className="auth-alert auth-alert-error" role="alert">
-              {errorMessage}
-            </div>
-          )}
-
           <div className="field-group">
             <label htmlFor="reset-email" className="field-label">
               Email

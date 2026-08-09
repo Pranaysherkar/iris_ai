@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useSyncExternalStore } from "react";
 
-import { pingBackendHealth } from "@/lib/api/backend-health";
+import { wakeBackendInBackground } from "@/lib/api/backend-health";
 
 export default function Home() {
   const mounted = useSyncExternalStore(
@@ -15,7 +15,7 @@ export default function Home() {
 
   // Silent wake: start API cold-start while user reads the landing page.
   useEffect(() => {
-    void pingBackendHealth({ timeoutMs: 90_000 });
+    wakeBackendInBackground();
   }, []);
 
   if (!mounted) return null;

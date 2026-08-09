@@ -14,6 +14,7 @@ from app.core.chat_title_quality import (
     should_defer_title_from_first_exchange,
 )
 from app.core.text_normalize import normalize_text
+from app.repositories.attachments_repository import attachments_repository
 from app.repositories.chat_repository import chat_repository, conversation_title_from_first_message
 from app.services.ai_service import ai_service
 from app.services.chat_tools import build_chat_model_messages
@@ -275,6 +276,13 @@ async def chat_endpoint(
 
     user_message_text = messages[-1].content
     user_message_id = _persist_user_message(conversation_id, user_id, messages)
+    if payload.attachment_ids:
+        attachments_repository.link_to_message(
+            user_id=user_id,
+            message_id=user_message_id,
+            attachment_ids=payload.attachment_ids,
+            conversation_id=conversation_id,
+        )
 
     extract_and_persist_facts(
         user_id,
@@ -363,6 +371,20 @@ async def chat_edit_endpoint(
         payload.message_id,
         content,
     )
+    # Keep file cards on the new active user turn after edit.
+    attachments_repository.relink_message_attachments(
+        user_id=user_id,
+        from_message_id=payload.message_id,
+        to_message_id=new_user_message_id,
+        conversation_id=conversation_id,
+    )
+    if payload.attachment_ids:
+        attachments_repository.link_to_message(
+            user_id=user_id,
+            message_id=new_user_message_id,
+            attachment_ids=payload.attachment_ids,
+            conversation_id=conversation_id,
+        )
 
     extract_and_persist_facts(
         user_id,

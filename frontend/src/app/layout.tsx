@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+
+import { ToastProvider } from "@/components/ui/ToastProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,7 +32,7 @@ export default function RootLayout({
     >
       {/* suppressHydrationWarning: browser extensions (e.g. ColorZilla) inject attrs like cz-shortcut-listen */}
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );

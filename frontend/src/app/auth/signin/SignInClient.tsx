@@ -6,11 +6,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import ForgotPasswordModal from "@/components/auth/ForgotPasswordModal";
+import { useToast } from "@/components/ui/ToastProvider";
+import { friendlyAuthError } from "@/lib/ui/friendly-messages";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 import { signInWithGoogle } from "@/lib/supabase/google-auth";
 
 export default function SignInClient() {
   const router = useRouter();
+  const { showToast } = useToast();
   const searchParams = useSearchParams();
   const checkEmail = searchParams.get("check_email") === "1";
   const emailConfirmedQuery = searchParams.get("email_confirmed") === "1";
@@ -22,11 +25,36 @@ export default function SignInClient() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(
-    oauthErrorParam ? decodeURIComponent(oauthErrorParam) : null,
-  );
   const [authChecked, setAuthChecked] = useState(false);
   const [forgotModalOpen, setForgotModalOpen] = useState(false);
+
+  // Query-param notices → toasts (auto-dismiss 5s); strip oauth_error from URL.
+  useEffect(() => {
+    if (oauthErrorParam) {
+      let decoded = oauthErrorParam;
+      try {
+        decoded = decodeURIComponent(oauthErrorParam);
+      } catch {
+        /* keep raw */
+      }
+      showToast(friendlyAuthError(decoded), "error");
+      router.replace("/auth/signin", { scroll: false });
+      return;
+    }
+    if (checkEmail) {
+      showToast(
+        "Check your inbox for the verification link. After you confirm, sign in below.",
+        "info",
+      );
+    }
+    if (emailConfirmedQuery && !checkEmail) {
+      showToast("Your email is verified. Sign in with your password below.", "success");
+    }
+    if (passwordReset) {
+      showToast("Your password was updated. Sign in with your new password.", "success");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- toast once per landing params
+  }, []);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -61,21 +89,23 @@ export default function SignInClient() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMessage(null);
 
     try {
       const supabase = createSupabaseBrowserClient();
       const { error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
-        setErrorMessage(error.message);
+        showToast(friendlyAuthError(error.message), "error");
         return;
       }
 
       router.push("/chat");
       router.refresh();
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Sign in failed");
+      showToast(
+        friendlyAuthError(err instanceof Error ? err.message : "Sign in failed"),
+        "error",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -83,16 +113,18 @@ export default function SignInClient() {
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
-    setErrorMessage(null);
     try {
       const { error } = await signInWithGoogle();
       if (error) {
-        setErrorMessage(error);
+        showToast(friendlyAuthError(error), "error");
         setGoogleLoading(false);
       }
       // On success the browser navigates away to Google.
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Google sign-in failed");
+      showToast(
+        friendlyAuthError(err instanceof Error ? err.message : "Google sign-in failed"),
+        "error",
+      );
       setGoogleLoading(false);
     }
   };
@@ -122,8 +154,6 @@ export default function SignInClient() {
       </div>
     );
   }
-
-  const showEmailConfirmedBanner = emailConfirmedQuery && !checkEmail;
 
   return (
     <div className="auth-root">
@@ -159,26 +189,6 @@ export default function SignInClient() {
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form" autoComplete="off">
-          {errorMessage && (
-            <div className="auth-alert auth-alert-error" role="alert">
-              {errorMessage}
-            </div>
-          )}
-          {checkEmail && (
-            <div className="auth-alert auth-alert-info" role="status">
-              Check your inbox for the verification link. After you confirm your email, sign in below.
-            </div>
-          )}
-          {showEmailConfirmedBanner && (
-            <div className="auth-alert auth-alert-success" role="status">
-              Your email is verified. Sign in with your password below.
-            </div>
-          )}
-          {passwordReset && (
-            <div className="auth-alert auth-alert-success" role="status">
-              Your password was updated. Sign in with your new password.
-            </div>
-          )}
           <div className="field-group">
             <label htmlFor="email" className="field-label">
               Email

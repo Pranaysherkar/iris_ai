@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
 from app.core.config import settings
 from app.core.supabase import get_supabase_admin_client
-from app.rag.types import TextChunk
+
+if TYPE_CHECKING:
+    from app.rag.types import TextChunk
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +76,60 @@ class AttachmentsRepository:
         )
         return resp.data[0] if resp.data else None
 
+    def create_signed_preview_url(
+        self,
+        attachment_id: str,
+        user_id: str,
+        *,
+        expires_in: int = 300,
+    ) -> Dict[str, Any]:
+        """Return a short-lived Storage URL for in-app preview (owner only)."""
+        row = self.get_owned(attachment_id, user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        bucket = row.get("bucket")
+        object_path = row.get("object_path")
+        if not bucket or not object_path:
+            raise HTTPException(status_code=404, detail="Attachment file missing")
+
+        expires = max(60, min(int(expires_in), 3600))
+        supabase = get_supabase_admin_client()
+        try:
+            signed = supabase.storage.from_(str(bucket)).create_signed_url(
+                str(object_path),
+                expires,
+            )
+        except Exception as exc:
+            logger.warning(
+                "signed_url_failed attachment=%s err=%s",
+                attachment_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Could not create preview link",
+            ) from exc
+
+        url = None
+        if isinstance(signed, dict):
+            url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
+        if not url or not isinstance(url, str):
+            raise HTTPException(status_code=502, detail="Could not create preview link")
+
+        return {
+            "url": url,
+            "file_name": row.get("file_name"),
+            "mime_type": row.get("mime_type"),
+            "type": row.get("type"),
+            "expires_in": expires,
+        }
+
     def list_for_conversation(
         self,
         user_id: str,
         conversation_id: str,
         *,
-        limit: int = 50,
+        limit: int = 200,
     ) -> List[Dict[str, Any]]:
         supabase = get_supabase_admin_client()
         cid = _uuid(conversation_id)
@@ -87,12 +137,12 @@ class AttachmentsRepository:
             supabase.table("attachments")
             .select(
                 "id,file_name,mime_type,type,file_size_bytes,ingestion_status,"
-                "conversation_id,created_at,updated_at,metadata"
+                "conversation_id,message_id,created_at,updated_at,metadata"
             )
             .eq("user_id", user_id)
             .eq("conversation_id", cid)
             .is_("deleted_at", "null")
-            .order("created_at", desc=True)
+            .order("created_at", desc=False)
             .limit(limit)
             .execute()
         )
@@ -173,6 +223,67 @@ class AttachmentsRepository:
             .eq("user_id", user_id)
             .execute()
         )
+
+    def link_to_message(
+        self,
+        *,
+        user_id: str,
+        message_id: str,
+        attachment_ids: Sequence[str],
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """Associate uploaded files with the user message that referenced them."""
+        if not attachment_ids:
+            return
+        supabase = get_supabase_admin_client()
+        mid = _uuid(message_id)
+        cid = _uuid(conversation_id) if conversation_id else None
+        for raw_id in attachment_ids:
+            try:
+                aid = _uuid(str(raw_id))
+            except HTTPException:
+                continue
+            row = self.get_owned(aid, user_id)
+            if not row:
+                continue
+            if cid and row.get("conversation_id") and str(row["conversation_id"]) != cid:
+                continue
+            patch: Dict[str, Any] = {"message_id": mid}
+            if cid and not row.get("conversation_id"):
+                patch["conversation_id"] = cid
+            (
+                supabase.table("attachments")
+                .update(patch)
+                .eq("id", aid)
+                .eq("user_id", user_id)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+
+    def relink_message_attachments(
+        self,
+        *,
+        user_id: str,
+        from_message_id: str,
+        to_message_id: str,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """Move attachment links from an edited user message to its new sibling."""
+        supabase = get_supabase_admin_client()
+        src = _uuid(from_message_id)
+        dst = _uuid(to_message_id)
+        if src == dst:
+            return
+        q = (
+            supabase.table("attachments")
+            .update({"message_id": dst})
+            .eq("user_id", user_id)
+            .eq("message_id", src)
+            .is_("deleted_at", "null")
+        )
+        if conversation_id:
+            q = q.eq("conversation_id", _uuid(conversation_id))
+        q.execute()
 
     def soft_delete(self, attachment_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         from datetime import datetime, timezone

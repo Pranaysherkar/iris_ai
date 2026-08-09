@@ -29,12 +29,14 @@ class AttachmentOut(BaseModel):
     file_size_bytes: Optional[int] = None
     ingestion_status: str
     conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     metadata: Optional[dict] = None
 
 
 def _to_out(row: dict) -> AttachmentOut:
+    mid = row.get("message_id")
     return AttachmentOut(
         id=str(row["id"]),
         file_name=row.get("file_name"),
@@ -43,6 +45,7 @@ def _to_out(row: dict) -> AttachmentOut:
         file_size_bytes=row.get("file_size_bytes"),
         ingestion_status=row.get("ingestion_status") or "pending",
         conversation_id=row.get("conversation_id"),
+        message_id=str(mid) if mid else None,
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
         metadata=row.get("metadata"),
@@ -88,6 +91,64 @@ async def upload_attachment(
         len(raw),
     )
     return _to_out(row)
+
+
+class AttachmentPreviewOut(BaseModel):
+    url: str
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    type: Optional[str] = None
+    expires_in: int
+    preview_kind: str
+
+
+def _preview_kind(mime_type: Optional[str], file_name: Optional[str], atype: Optional[str]) -> str:
+    mime = (mime_type or "").lower()
+    name = (file_name or "").lower()
+    kind = (atype or "").lower()
+    if mime.startswith("image/") or kind == "image" or name.endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif")
+    ):
+        return "image"
+    if mime == "application/pdf" or kind == "pdf" or name.endswith(".pdf"):
+        return "pdf"
+    if (
+        "wordprocessingml" in mime
+        or kind == "docx"
+        or name.endswith(".docx")
+    ):
+        return "docx"
+    if mime.startswith("text/") or name.endswith(".txt"):
+        return "text"
+    return "other"
+
+
+@router.get("/attachments/{attachment_id}/preview", response_model=AttachmentPreviewOut)
+async def preview_attachment(
+    attachment_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """
+    Auth-gated short-lived Storage signed URL for in-app preview modal.
+    Does not expose database credentials — only a temporary object URL.
+    """
+    data = attachments_repository.create_signed_preview_url(
+        attachment_id,
+        user_id,
+        expires_in=300,
+    )
+    return AttachmentPreviewOut(
+        url=data["url"],
+        file_name=data.get("file_name"),
+        mime_type=data.get("mime_type"),
+        type=data.get("type"),
+        expires_in=int(data["expires_in"]),
+        preview_kind=_preview_kind(
+            data.get("mime_type"),
+            data.get("file_name"),
+            data.get("type"),
+        ),
+    )
 
 
 @router.get("/attachments/{attachment_id}", response_model=AttachmentOut)

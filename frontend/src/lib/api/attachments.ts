@@ -10,6 +10,7 @@ export type AttachmentDto = {
   file_size_bytes?: number | null;
   ingestion_status: AttachmentStatus | string;
   conversation_id?: string | null;
+  message_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   metadata?: Record<string, unknown> | null;
@@ -66,6 +67,61 @@ export async function uploadAttachment(
     return { data };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Upload failed" };
+  }
+}
+
+export async function listAttachments(
+  accessToken: string,
+  conversationId: string,
+): Promise<{ data?: AttachmentDto[]; error?: string }> {
+  const base = getPublicApiBaseUrl();
+  if (!base) return { error: "Missing NEXT_PUBLIC_API_URL." };
+  try {
+    const qs = new URLSearchParams({ conversation_id: conversationId });
+    const res = await fetch(`${base}/api/v1/attachments?${qs}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      return { error: `${res.status}: ${res.statusText}` };
+    }
+    return { data: (await res.json()) as AttachmentDto[] };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Fetch failed" };
+  }
+}
+
+export type AttachmentPreviewDto = {
+  url: string;
+  file_name?: string | null;
+  mime_type?: string | null;
+  type?: string | null;
+  expires_in: number;
+  preview_kind: "image" | "pdf" | "docx" | "text" | "other" | string;
+};
+
+export async function getAttachmentPreview(
+  accessToken: string,
+  attachmentId: string,
+): Promise<{ data?: AttachmentPreviewDto; error?: string }> {
+  const base = getPublicApiBaseUrl();
+  if (!base) return { error: "Missing NEXT_PUBLIC_API_URL." };
+  try {
+    const res = await fetch(`${base}/api/v1/attachments/${attachmentId}/preview`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        /* ignore */
+      }
+      return { error: `${res.status}: ${detail}` };
+    }
+    return { data: (await res.json()) as AttachmentPreviewDto };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Preview failed" };
   }
 }
 

@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { Message } from "./ChatLayout";
+import AttachmentPreviewModal, { type PreviewTarget } from "./AttachmentPreviewModal";
 
 type Props = {
   message: Message;
@@ -125,6 +126,7 @@ export default function MessageBubble({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [busy, setBusy] = useState(false);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const branchTotal = message.branchTotal ?? 1;
@@ -192,18 +194,38 @@ export default function MessageBubble({
           {attachments.length > 0 ? (
             <div className="msg-file-list" aria-label="Attached files">
               {attachments.map((file) => (
-                <div key={file.id} className="msg-file-card">
+                <button
+                  key={file.id}
+                  type="button"
+                  className="msg-file-card"
+                  onClick={() =>
+                    setPreviewTarget({
+                      id: file.id,
+                      fileName: file.fileName,
+                      mimeType: file.mimeType,
+                      kindLabel: file.kindLabel,
+                    })
+                  }
+                  title={`Preview ${file.fileName}`}
+                >
                   <FileDocIcon kind={file.kindLabel} />
                   <div className="msg-file-meta">
                     <span className="msg-file-name" title={file.fileName}>
                       {file.fileName}
                     </span>
-                    <span className="msg-file-kind">{file.kindLabel}</span>
+                    <span className="msg-file-kind">
+                      {file.kindLabel}
+                      <span className="msg-file-preview-hint"> · Preview</span>
+                    </span>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           ) : null}
+          <AttachmentPreviewModal
+            target={previewTarget}
+            onClose={() => setPreviewTarget(null)}
+          />
           {editing ? (
             <div className="msg-edit-panel">
               <textarea
@@ -617,6 +639,19 @@ const bubbleStyles = `
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .msg-file-card:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(167, 139, 250, 0.35);
+  }
+  .msg-file-preview-hint {
+    color: #a78bfa;
+    font-weight: 500;
   }
   .msg-file-icon {
     width: 40px;

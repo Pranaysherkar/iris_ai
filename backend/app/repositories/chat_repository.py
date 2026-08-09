@@ -222,6 +222,87 @@ class ChatRepository:
             lst.sort(key=lambda r: int(r.get("branch_version") or 1))
         return out
 
+    def _attachment_history_item(self, row: Dict[str, Any]) -> dict:
+        return {
+            "id": str(row["id"]),
+            "file_name": row.get("file_name"),
+            "mime_type": row.get("mime_type"),
+            "type": row.get("type"),
+            "file_size_bytes": row.get("file_size_bytes"),
+            "ingestion_status": row.get("ingestion_status") or "pending",
+            "created_at": row.get("created_at"),
+        }
+
+    def _attachments_for_history_messages(
+        self,
+        conversation_id: str,
+        user_id: str,
+        message_ids: Set[str],
+        user_message_times: Dict[str, Any],
+    ) -> Dict[str, List[dict]]:
+        """
+        Map attachment rows onto active user message ids.
+
+        Linked rows use ``message_id``. Legacy / unmatched rows (null message_id
+        or pointing at an inactive sibling) are placed on the nearest later
+        user turn by ``created_at``.
+        """
+        from app.repositories.attachments_repository import attachments_repository
+
+        by_msg: Dict[str, List[dict]] = {mid: [] for mid in message_ids}
+        if not message_ids:
+            return by_msg
+
+        try:
+            rows = attachments_repository.list_for_conversation(
+                user_id, conversation_id, limit=200
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "history_attachments_load_failed conversation=%s err=%s",
+                conversation_id,
+                exc,
+            )
+            return by_msg
+
+        orphans: List[Dict[str, Any]] = []
+        for row in rows:
+            item = self._attachment_history_item(row)
+            mid = row.get("message_id")
+            mid_s = str(mid) if mid else ""
+            if mid_s and mid_s in by_msg:
+                by_msg[mid_s].append(item)
+            else:
+                orphans.append(row)
+
+        if not orphans:
+            return by_msg
+
+        # Chronological user turns for orphan placement
+        ordered = sorted(
+            (
+                (mid, user_message_times.get(mid))
+                for mid in message_ids
+            ),
+            key=lambda pair: str(pair[1] or ""),
+        )
+        if not ordered:
+            return by_msg
+
+        for row in orphans:
+            item = self._attachment_history_item(row)
+            created = str(row.get("created_at") or "")
+            target = ordered[-1][0]
+            for mid, created_at in ordered:
+                if str(created_at or "") >= created:
+                    target = mid
+                    break
+            by_msg.setdefault(target, []).append(item)
+
+        return by_msg
+
     def _enrich_active_history(
         self,
         conversation_id: str,
@@ -234,6 +315,15 @@ class ChatRepository:
             if r.get("sibling_group_id") and r.get("role") == "user"
         }
         stats = self._sibling_stats(conversation_id, user_id, group_ids)
+
+        user_ids = {str(r["id"]) for r in rows if r.get("role") == "user"}
+        user_times = {
+            str(r["id"]): r.get("created_at") for r in rows if r.get("role") == "user"
+        }
+        attachments_by_msg = self._attachments_for_history_messages(
+            conversation_id, user_id, user_ids, user_times
+        )
+
         enriched: List[dict] = []
         for row in rows:
             item: dict = {
@@ -250,17 +340,20 @@ class ChatRepository:
                 "branch_version": int(row.get("branch_version") or 1),
                 "branch_total": 1,
                 "branch_siblings": [],
+                "attachments": [],
             }
-            if row.get("role") == "user" and row.get("sibling_group_id"):
-                siblings = stats.get(str(row["sibling_group_id"]), [])
-                item["branch_total"] = max(len(siblings), 1)
-                item["branch_siblings"] = [
-                    {
-                        "id": str(s["id"]),
-                        "branch_version": int(s.get("branch_version") or 1),
-                    }
-                    for s in siblings
-                ]
+            if row.get("role") == "user":
+                item["attachments"] = attachments_by_msg.get(str(row["id"]), [])
+                if row.get("sibling_group_id"):
+                    siblings = stats.get(str(row["sibling_group_id"]), [])
+                    item["branch_total"] = max(len(siblings), 1)
+                    item["branch_siblings"] = [
+                        {
+                            "id": str(s["id"]),
+                            "branch_version": int(s.get("branch_version") or 1),
+                        }
+                        for s in siblings
+                    ]
             enriched.append(item)
         return enriched
 

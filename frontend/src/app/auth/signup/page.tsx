@@ -6,14 +6,17 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import VerifyEmailModal from "@/components/auth/VerifyEmailModal";
-import BackendWarmupGate from "@/components/warmup/BackendWarmupGate";
+import { useToast } from "@/components/ui/ToastProvider";
+import WakeBackendOnMount from "@/components/warmup/WakeBackendOnMount";
 import { publicAppUrl } from "@/lib/site-url";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
 import { signInWithGoogle } from "@/lib/supabase/google-auth";
 import { upsertProfileRow } from "@/lib/supabase/profile";
+import { friendlyAuthError } from "@/lib/ui/friendly-messages";
 
 export default function SignUpPage() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [fullName, setFullName] = useState("");
   const [dob, setDob] = useState("");
   const [email, setEmail] = useState("");
@@ -22,7 +25,6 @@ export default function SignUpPage() {
   const [agreed, setAgreed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [verifyModalOpen, setVerifyModalOpen] = useState(false);
 
   const strength = getStrength(password);
@@ -31,7 +33,6 @@ export default function SignUpPage() {
     e.preventDefault();
     if (!agreed) return;
     setIsLoading(true);
-    setErrorMessage(null);
 
     try {
       const supabase = createSupabaseBrowserClient();
@@ -48,21 +49,20 @@ export default function SignUpPage() {
       });
 
       if (error) {
-        setErrorMessage(error.message);
+        showToast(friendlyAuthError(error.message), "error");
         return;
       }
 
       // Supabase returns a user with empty identities[] when the email
       // already exists (it does NOT return an error for security reasons).
-      // Detect this and show a clear message instead of the misleading
-      // "verification link sent" modal.
       const user = data.user;
       if (
         user &&
         (!user.identities || user.identities.length === 0)
       ) {
-        setErrorMessage(
-          "An account with this email already exists. Please sign in instead."
+        showToast(
+          "An account with this email already exists. Please sign in instead.",
+          "error",
         );
         return;
       }
@@ -77,7 +77,10 @@ export default function SignUpPage() {
           Boolean(session.user.email_confirmed_at),
         );
         if (profileError) {
-          setErrorMessage(profileError.message);
+          showToast(
+            "Account created, but we couldn’t save your profile. Please try signing in.",
+            "warning",
+          );
           return;
         }
         router.push("/chat");
@@ -86,7 +89,10 @@ export default function SignUpPage() {
         setVerifyModalOpen(true);
       }
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Sign up failed");
+      showToast(
+        friendlyAuthError(err instanceof Error ? err.message : "Sign up failed"),
+        "error",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -94,21 +100,24 @@ export default function SignUpPage() {
 
   const handleGoogleSignUp = async () => {
     setGoogleLoading(true);
-    setErrorMessage(null);
     try {
       const { error } = await signInWithGoogle();
       if (error) {
-        setErrorMessage(error);
+        showToast(friendlyAuthError(error), "error");
         setGoogleLoading(false);
       }
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Google sign-up failed");
+      showToast(
+        friendlyAuthError(err instanceof Error ? err.message : "Google sign-up failed"),
+        "error",
+      );
       setGoogleLoading(false);
     }
   };
 
   return (
-    <BackendWarmupGate>
+    <>
+    <WakeBackendOnMount />
     <div className="auth-root">
       <div className="blob blob-1" />
       <div className="blob blob-2" />
@@ -142,11 +151,6 @@ export default function SignUpPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form" autoComplete="off">
-          {errorMessage && (
-            <div className="auth-alert auth-alert-error" role="alert">
-              {errorMessage}
-            </div>
-          )}
           {/* Full Name */}
           <div className="field-group">
             <label htmlFor="fullName" className="field-label">Full Name</label>
@@ -301,7 +305,7 @@ export default function SignUpPage() {
 
       <style>{authStyles}</style>
     </div>
-    </BackendWarmupGate>
+    </>
   );
 }
 

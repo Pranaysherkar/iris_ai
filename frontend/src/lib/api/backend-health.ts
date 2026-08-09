@@ -28,6 +28,16 @@ export function markBackendWarm(): void {
 }
 
 /**
+ * Fire-and-forget wake for auth/landing pages: start Render cold-start
+ * while the user fills the form. Does not block UI.
+ */
+export function wakeBackendInBackground(): void {
+  if (typeof window === "undefined") return;
+  if (isBackendRecentlyWarm()) return;
+  void pingBackendHealth({ timeoutMs: 90_000 });
+}
+
+/**
  * Ping backend health via Next.js proxy.
  * Resolves true when the upstream API responds OK (or API URL is unset).
  */

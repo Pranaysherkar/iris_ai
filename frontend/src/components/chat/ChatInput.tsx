@@ -3,6 +3,8 @@
 import { useState, useRef, KeyboardEvent, useEffect } from "react";
 import type { AttachmentDto } from "@/lib/api/attachments";
 import { isAllowedAttachmentFile } from "@/lib/api/attachments";
+import { useToast } from "@/components/ui/ToastProvider";
+import { friendlyUploadError } from "@/lib/ui/friendly-messages";
 
 export type PendingAttachment = AttachmentDto & {
   localError?: string;
@@ -39,9 +41,9 @@ export default function ChatInput({
   voiceSpeaking = false,
   disabled = false,
 }: Props) {
+  const { showToast } = useToast();
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
-  const [attachError, setAttachError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -144,11 +146,10 @@ export default function ChatInput({
 
     if (rejected.length > 0) {
       const names = rejected.map((f) => f.name).join(", ");
-      setAttachError(
+      showToast(
         `Unsupported file${rejected.length > 1 ? "s" : ""}: ${names}. Use PDF, PNG, JPG, WEBP, DOCX, or TXT.`,
+        "error",
       );
-    } else {
-      setAttachError(null);
     }
 
     if (!allowed.length) return;
@@ -156,7 +157,10 @@ export default function ChatInput({
     try {
       await onUploadFiles(allowed);
     } catch (err) {
-      setAttachError(err instanceof Error ? err.message : "Upload failed");
+      showToast(
+        friendlyUploadError(err instanceof Error ? err.message : "Upload failed"),
+        "error",
+      );
     }
   };
 
@@ -171,20 +175,6 @@ export default function ChatInput({
 
   return (
     <div className="chat-input-outer">
-      {attachError ? (
-        <p className="attach-error" role="alert">
-          {attachError}
-          <button
-            type="button"
-            className="attach-error-dismiss"
-            aria-label="Dismiss"
-            onClick={() => setAttachError(null)}
-          >
-            ×
-          </button>
-        </p>
-      ) : null}
-
       {pendingAttachments.length > 0 ? (
         <div className="attach-chips" aria-label="Attached files">
           {pendingAttachments.map((a) => (

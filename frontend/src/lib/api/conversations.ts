@@ -17,6 +17,16 @@ export type BranchSiblingDto = {
   branch_version: number;
 };
 
+export type HistoryAttachmentDto = {
+  id: string;
+  file_name?: string | null;
+  mime_type?: string | null;
+  type?: string | null;
+  file_size_bytes?: number | null;
+  ingestion_status?: string | null;
+  created_at?: string | null;
+};
+
 export type HistoryMessageDto = {
   id: string;
   role: string;
@@ -28,6 +38,8 @@ export type HistoryMessageDto = {
   branch_version?: number;
   branch_total?: number;
   branch_siblings?: BranchSiblingDto[];
+  /** Files linked to this user turn (from history enrich). */
+  attachments?: HistoryAttachmentDto[];
 };
 
 export type ConversationHistoryResponse = {

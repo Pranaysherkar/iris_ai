@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { useToast } from "@/components/ui/ToastProvider";
 import { publicAppUrl } from "@/lib/site-url";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { friendlyAuthError } from "@/lib/ui/friendly-messages";
 
 type Props = {
   open: boolean;
@@ -11,15 +13,14 @@ type Props = {
 };
 
 export default function ForgotPasswordModal({ open, onClose }: Props) {
+  const { showToast } = useToast();
   const [step, setStep] = useState<"form" | "sent">("form");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const handleDismiss = useCallback(() => {
     setStep("form");
     setEmail("");
-    setError(null);
     setLoading(false);
     onClose();
   }, [onClose]);
@@ -37,7 +38,6 @@ export default function ForgotPasswordModal({ open, onClose }: Props) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
     setLoading(true);
     try {
       const supabase = createSupabaseBrowserClient();
@@ -45,12 +45,20 @@ export default function ForgotPasswordModal({ open, onClose }: Props) {
         redirectTo: publicAppUrl("/auth/reset-password"),
       });
       if (resetError) {
-        setError(resetError.message);
+        showToast(
+          friendlyAuthError(resetError.message) ||
+            "Couldn’t send the reset link. Check your email and try again.",
+          "error",
+        );
         return;
       }
       setStep("sent");
+      showToast("If an account exists for that email, we’ve sent a reset link.", "success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      showToast(
+        friendlyAuthError(err instanceof Error ? err.message : "Something went wrong"),
+        "error",
+      );
     } finally {
       setLoading(false);
     }
@@ -80,11 +88,6 @@ export default function ForgotPasswordModal({ open, onClose }: Props) {
               Enter the email for your account. We&apos;ll send a link to create a new password.
             </p>
             <form onSubmit={handleSubmit} className="forgot-modal-form">
-              {error && (
-                <div className="forgot-modal-error" role="alert">
-                  {error}
-                </div>
-              )}
               <label className="forgot-modal-label" htmlFor="forgot-email">
                 Email
               </label>
